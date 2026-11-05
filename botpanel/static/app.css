@@ -204,7 +204,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--act); outli
 .bothead h1 { display: flex; align-items: center; gap: 0.8rem; overflow-wrap: anywhere; }
 .bothead h1 .lamp { width: 18px; height: 18px; }
 .power { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
-.tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--line); margin-bottom: 1.5rem; overflow-x: auto; }
+.tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--line); margin-bottom: 1.5rem; overflow-x: auto; overflow-y: hidden; }
 .tabs a {
   padding: 0.6rem 1rem;
   color: var(--ink-soft);
