@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from botpanel import __version__, builder, gitops
+from botpanel import __version__, builder, gitops, options
 from botpanel.auth import Auth, avatar_url
 from botpanel.config import Settings
 from botpanel.db import Database
@@ -72,6 +72,8 @@ class Panel:
         r.add_post("/api/bots/{bot}/command", self.command)
         r.add_get("/api/bots/{bot}/console", self.console)
         r.add_get("/api/bots/{bot}/activity", self.bot_activity)
+        r.add_get("/api/bots/{bot}/options", self.options_get)
+        r.add_post("/api/bots/{bot}/options", self.options_save)
         r.add_get("/api/bots/{bot}/env", self.get_env)
         r.add_put("/api/bots/{bot}/env", self.put_env)
         r.add_post("/api/bots/{bot}/git", self.git_pull)
@@ -138,7 +140,7 @@ class Panel:
             return await handler(request)
         except ApiError as e:
             return web.json_response({"error": str(e)}, status=e.status)
-        except (FileError, gitops.FileError, builder.TemplateError, RuntimeError_) as e:
+        except (FileError, gitops.FileError, builder.TemplateError, RuntimeError_, options.OptionsError) as e:
             return web.json_response({"error": str(e)}, status=400)
         except builder.DiscordError as e:
             return web.json_response({"error": str(e)}, status=400 if e.status != 401 else 400)
@@ -288,6 +290,7 @@ class Panel:
         data["web_url"] = f"http://{self.settings.public_host}:{bot['port']}" if bot.get("port") else None
         data.update(auto_restart=bool(bot["auto_restart"]), wanted_running=bool(bot["wanted_running"]),
                     has_git_token=bool(bot["git_token"]), owner_id=str(bot["owner_id"]), status=status,
+                    has_options=options.has_schema(self.files(bot["id"])),
                     stats=await self.stats(bot["id"]) if status["state"] == "running" else None,
                     disk_mb=round(await self.disk_bytes(bot["id"]) / 1024 / 1024, 1))
         if details:
@@ -580,6 +583,27 @@ class Panel:
             await asyncio.gather(*tasks, return_exceptions=True)
             self.runtime.console.unsubscribe(bot_id, queue)
         return ws
+
+    # ---- Options du bot (réglages décrits par le bot lui-même) --------------------------------
+    async def options_get(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)
+        data = await asyncio.to_thread(options.load, self.files(bot["id"]))
+        status = await self.runtime.status(bot["id"]) if self.docker_ok else {"state": "unknown"}
+        return web.json_response({**data, "running": status["state"] == "running"})
+
+    async def options_save(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)
+        data = await self.body(request)
+        status = await self.runtime.status(bot["id"]) if self.docker_ok else {"state": "unknown"}
+        if status["state"] != "running":
+            raise ApiError("Démarre le bot pour changer ses options : c'est lui qui les vérifie et les applique")
+        user = request[USER]
+        answer = await options.send(self.files(bot["id"]), str(data.get("scope", "")), str(data.get("page", "")),
+                                    data.get("values"), user)
+        if answer["ok"]:
+            await self.db.log(user["id"], "Options du bot modifiées", bot_id=bot["id"],
+                              detail=f"{data.get('page')} ({data.get('scope')})")
+        return web.json_response(answer, status=200 if answer["ok"] else 400)
 
     # ---- Variables d'environnement ------------------------------------------------------------
     async def get_env(self, request: web.Request) -> web.Response:

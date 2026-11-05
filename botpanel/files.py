@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 BOT_UID = BOT_GID = 1000      # utilisateur des conteneurs
 MAX_EDIT_SIZE = 1024 * 1024   # 1 Mo : au-delà, on édite pas dans le navigateur
 MAX_ZIP_FILES = 20000
-HIDDEN = {".local", ".npm", ".cache", "node_modules", "__pycache__"}  # repliés par défaut dans la liste
+HIDDEN = {".local", ".npm", ".cache", "node_modules", "__pycache__", ".botpanel"}  # repliés par défaut dans la liste
 
 
 def own(path: Path | str) -> None:

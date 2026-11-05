@@ -350,3 +350,65 @@ async def test_web_port(env):
         else:
             raise AssertionError("le site du bot répond pas sur son port")
     await admin.post(f"/api/bots/{bid}/power", json={"action": "kill"}, headers=H)
+
+
+async def test_bot_options(env):
+    """Onglet « Options du bot » : le panel lit ce que le bot décrit et lui passe les changements."""
+    panel, client, _ = env
+    admin = await client(ADMIN)
+    bid = (await (await admin.post("/api/bots", json={"name": "Options", "language": "python"}, headers=H)).json())["id"]
+    data = await (await admin.get(f"/api/bots/{bid}/options")).json()
+    assert data["available"] is False
+    assert (await (await admin.get(f"/api/bots/{bid}")).json())["has_options"] is False
+
+    root = panel.settings.bots_dir / bid / ".botpanel"
+    (root / "inbox").mkdir(parents=True)
+    (root / "outbox").mkdir()
+    (root / "schema.json").write_text(json.dumps({"title": "Test", "scope": "guild", "pages": [
+        {"id": "accueil", "title": "Accueil", "icon": "👋", "fields": [
+            {"key": "salon", "label": "Salon", "type": "channel"},
+            {"key": "x", "label": "<script>", "type": "inconnu"},  # type inconnu : ignoré
+            {"key": "grades", "label": "Grades", "type": "role_map", "keys": [["CHEF", "Chef"]]},
+        ]}]}))
+    (root / "state.json").write_text(json.dumps({"updated": __import__("time").time(), "scopes": [
+        {"id": "555", "name": "Amour", "icon": "javascript:alert(1)", "channels": [{"id": "10", "name": "général"}, {"id": "pas-un-id"}],
+         "roles": [{"id": "2", "name": "Officier"}], "values": {"accueil": {"salon": "10"}}}]}))
+    data = await (await admin.get(f"/api/bots/{bid}/options")).json()
+    assert data["available"] and not data["stale"] and not data["running"]
+    assert [f["key"] for f in data["pages"][0]["fields"]] == ["salon", "grades"]
+    scope = data["scopes"][0]
+    assert scope["icon"] is None and [c["id"] for c in scope["channels"]] == ["10"]
+    assert (await (await admin.get(f"/api/bots/{bid}")).json())["has_options"] is True
+
+    # Bot arrêté : refusé
+    r = await admin.post(f"/api/bots/{bid}/options", json={"scope": "555", "page": "accueil", "values": {"salon": "10"}}, headers=H)
+    assert r.status == 400 and "Démarre le bot" in (await r.json())["error"]
+
+    # Bot « en marche » (simulé) qui répond aux demandes
+    async def running(_):
+        return {"state": "running", "exit_code": 0, "oom": False}
+    panel.runtime.status = running
+    panel.docker_ok = True
+
+    async def fake_bot():
+        while True:
+            for req in (root / "inbox").glob("*.json"):
+                body = json.loads(req.read_text())
+                req.unlink()
+                ok = body["values"].get("salon") == "10"
+                (root / "outbox" / f"{body['id']}.json").write_text(json.dumps(
+                    {"ok": ok, "error": None if ok else "Salon introuvable sur ce serveur"}))
+            await asyncio.sleep(0.05)
+
+    task = asyncio.create_task(fake_bot())
+    try:
+        r = await admin.post(f"/api/bots/{bid}/options", json={"scope": "555", "page": "accueil", "values": {"salon": "10"}}, headers=H)
+        assert (await r.json()) == {"ok": True, "error": None}
+        r = await admin.post(f"/api/bots/{bid}/options", json={"scope": "555", "page": "accueil", "values": {"salon": "99"}}, headers=H)
+        assert r.status == 400 and (await r.json())["error"] == "Salon introuvable sur ce serveur"
+        r = await admin.post(f"/api/bots/{bid}/options", json={"scope": "../x", "page": "accueil", "values": {}}, headers=H)
+        assert r.status == 400
+    finally:
+        task.cancel()
+        panel.docker_ok = False  # pas de vrai Docker dans ce test
+    assert not list((root / "outbox").iterdir())  # le panel fait le ménage

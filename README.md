@@ -164,6 +164,45 @@ Voici les règles du modèle :
 - **Permissions d'un salon** : il reprend celles de sa catégorie. Ce que tu mets dans un salon pour un rôle remplace ce que dit la catégorie pour ce rôle. `Rôle: {}` veut dire « rien de spécial pour ce rôle ici ».
 - **Noms de permissions** : ce sont ceux de discord.py (`view_channel`, `manage_roles`, etc.). La liste complète est dans la page.
 
+### Options du bot
+
+Un bot peut avoir son propre onglet **Options du bot** dans le panel : des pages de réglages avec des listes de salons et de rôles de chaque serveur. Pas besoin de site web ni de port. Tout passe par des fichiers dans le dossier du bot :
+
+| Fichier | Écrit par | Contenu |
+|---|---|---|
+| `.botpanel/schema.json` | le bot | les pages de réglages et leurs champs |
+| `.botpanel/state.json` | le bot, aux 30 secondes environ | les serveurs (salons, rôles) et les valeurs actuelles |
+| `.botpanel/inbox/<id>.json` | le panel | une modification : `{"id", "scope", "page", "values", "user"}` |
+| `.botpanel/outbox/<id>.json` | le bot | la réponse : `{"ok": true}` ou `{"ok": false, "error": "..."}` |
+
+Exemple de `schema.json` :
+
+```json
+{"title": "Mon bot", "scope": "guild", "pages": [
+  {"id": "accueil", "title": "Accueil", "icon": "👋", "description": "Message aux nouveaux.", "fields": [
+    {"key": "actif", "label": "Activé", "type": "bool"},
+    {"key": "salon", "label": "Salon", "type": "channel"},
+    {"key": "message", "label": "Message", "type": "textarea", "help": "{membre} = la mention"}
+  ]}
+]}
+```
+
+Types de champs :
+
+| Type | Ce que ça donne |
+|---|---|
+| `bool`, `int` (avec `min` et `max`), `text`, `textarea` | une case, un nombre ou du texte |
+| `lines` | une liste, une ligne par élément |
+| `select` | une liste de choix, dans `choices: [[valeur, texte], …]` |
+| `channel`, `category`, `role` | un salon, une catégorie ou un rôle |
+| `channels`, `roles` | plusieurs salons ou plusieurs rôles |
+| `role_map` | un rôle pour chaque clé de `keys: [[clé, texte], …]` |
+| `number_roles` | des paires « nombre › rôle », comme les récompenses de niveau |
+
+Dans `state.json`, chaque serveur a la forme `{"id", "name", "channels": [{"id", "name", "category"}], "categories", "roles", "values": {"page": {"clé": valeur}}}`. Les IDs Discord s'écrivent en texte.
+
+Le bot vérifie lui-même ce qu'il reçoit. Le bot amour en est un exemple complet (`utils/panelbridge.py`).
+
 ## Mettre le panel sur Internet
 
 Passe par ton proxy (HAProxy, Nginx Proxy Manager…) avec un certificat HTTPS. Le proxy doit laisser passer les WebSocket, sinon la console marchera pas.

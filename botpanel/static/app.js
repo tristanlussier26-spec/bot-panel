@@ -290,7 +290,8 @@ async function pageNewBot() {
 // ---------------------------------------------------------------------------------------------
 // Page d'un bot
 // ---------------------------------------------------------------------------------------------
-const TABS = [["console", "Console"], ["fichiers", "Fichiers"], ["variables", "Variables"], ["reglages", "Réglages"], ["activite", "Activité"]];
+const TABS = [["console", "Console"], ["options", "Options du bot"], ["fichiers", "Fichiers"], ["variables", "Variables"],
+  ["reglages", "Réglages"], ["activite", "Activité"]];
 
 async function pageBot(id, tab) {
   let bot = await api("GET", `/api/bots/${id}`);
@@ -317,13 +318,14 @@ async function pageBot(id, tab) {
   paintHead();
 
   const tabs = h("nav", { class: "tabs", "aria-label": "Onglets du bot" },
-    TABS.map(([key, label]) => h("a", { href: `#/bot/${id}/${key}`, class: key === tab ? "current" : null, "aria-current": key === tab ? "page" : null }, label)));
+    TABS.filter(([key]) => key !== "options" || bot.has_options || tab === "options").map(([key, label]) => h("a", { href: `#/bot/${id}/${key}`, class: key === tab ? "current" : null, "aria-current": key === tab ? "page" : null }, label)));
   const body = h("div", {});
   mount(h("a", { class: "back", href: "#/" }, "Retour aux bots"),
     h("div", { class: "bothead" }, h("div", {}, title, stateLine), power), tabs, body);
 
   const setBot = (fresh) => { bot = { ...bot, ...fresh }; paintHead(); };
   if (tab === "console") tabConsole(bot, body, setBot);
+  else if (tab === "options") await tabOptions(bot, body);
   else if (tab === "fichiers") await tabFiles(bot, body);
   else if (tab === "variables") await tabEnv(bot, body);
   else if (tab === "reglages") tabSettings(bot, body, setBot);
@@ -410,6 +412,180 @@ function since(iso) {
   if (s < 3600) return `${Math.round(s / 60)} min`;
   if (s < 86400) return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
   return `${Math.floor(s / 86400)} j ${Math.floor((s % 86400) / 3600)} h`;
+}
+
+// ---- Options du bot (réglages décrits par le bot) -----------------------------------------------
+async function tabOptions(bot, body) {
+  const data = await api("GET", `/api/bots/${bot.id}/options`);
+  if (!data.available) {
+    fill(body, h("div", { class: "panelbox" }, h("h2", {}, "Ce bot a pas d'options"),
+      h("p", { class: "soft" }, "Un bot peut décrire ses réglages dans le fichier .botpanel/schema.json : Bot Panel affiche alors ici un formulaire pour les changer. Le README explique comment.")));
+    return;
+  }
+  const scopes = data.scopes;
+  let scopeId = sessionStorage.getItem(`scope:${bot.id}`);
+  if (!scopes.some((sc) => sc.id === scopeId)) scopeId = scopes.length ? scopes[0].id : null;
+  let pageId = sessionStorage.getItem(`page:${bot.id}`);
+  if (!data.pages.some((p) => p.id === pageId)) pageId = data.pages.length ? data.pages[0].id : null;
+
+  const warn = !data.running ? "Le bot est arrêté : démarre-le pour changer ses options (c'est lui qui les vérifie et les applique)."
+    : data.stale ? "Le bot a pas donné de nouvelles depuis un moment : les salons et rôles affichés sont peut-être plus à jour." : null;
+
+  if (data.scope === "guild" && !scopes.length) {
+    fill(body, warn ? h("div", { class: "banner" }, warn) : null, h("div", { class: "panelbox" }, h("h2", {}, "Aucun serveur"),
+      h("p", { class: "soft" }, "Le bot est sur aucun serveur Discord pour l'instant, ou il a pas encore démarré. Invite-le sur un serveur, puis reviens ici.")));
+    return;
+  }
+
+  function render() {
+    const scope = scopes.find((sc) => sc.id === scopeId);
+    const page = data.pages.find((p) => p.id === pageId);
+    const scopeSel = data.scope === "guild" ? h("select", { id: "opt-scope", onchange: (e) => {
+      scopeId = e.target.value; sessionStorage.setItem(`scope:${bot.id}`, scopeId); render();
+    } }, scopes.map((sc) => h("option", { value: sc.id }, sc.name))) : null;
+    if (scopeSel) scopeSel.value = scopeId;
+    const nav = h("nav", { class: "optnav", "aria-label": "Pages d'options" }, data.pages.map((p) => h("button", {
+      type: "button", class: p.id === pageId ? "current" : null, "aria-current": p.id === pageId ? "page" : null,
+      onclick: () => { pageId = p.id; sessionStorage.setItem(`page:${bot.id}`, pageId); render(); },
+    }, p.icon ? h("span", { "aria-hidden": "true" }, p.icon) : null, p.title)));
+    fill(body,
+      warn ? h("div", { class: "banner" }, warn) : null,
+      h("div", { class: "optgrid" },
+        h("div", {},
+          scopeSel ? h("div", { class: "field" }, h("label", { for: "opt-scope" }, "Serveur Discord"), scopeSel) : null,
+          scope && scope.info.length ? h("dl", { class: "optinfo" }, scope.info.map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))) : null,
+          nav),
+        page && scope ? optionsForm(bot, data, scope, page, data.running) : h("p", { class: "soft" }, "Rien à régler.")));
+  }
+  render();
+}
+
+function optionsForm(bot, data, scope, page, running) {
+  const values = scope.values[page.id] || {};
+  const readers = [];
+  const textChannels = scope.channels.filter((c) => !c.voice);
+  const NONE = "Aucun";
+
+  function channelSelect(id, current, list) {
+    const sel = h("select", { id }, h("option", { value: "0" }, NONE));
+    const groups = new Map();
+    for (const c of list) {
+      const key = c.category || "";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    }
+    for (const [cat, items] of groups) {
+      const opts = items.map((c) => h("option", { value: c.id }, `# ${c.name}`));
+      sel.append(cat ? h("optgroup", { label: cat }, opts) : opts);
+    }
+    sel.value = current && current !== "0" ? String(current) : "0";
+    if (sel.value === "" ) sel.value = "0";
+    return sel;
+  }
+  function roleSelect(id, current) {
+    const sel = h("select", { id }, h("option", { value: "0" }, NONE),
+      scope.roles.map((r) => h("option", { value: r.id }, r.manageable ? r.name : `${r.name} (au-dessus du bot)`)));
+    sel.value = current && String(current) !== "0" ? String(current) : "0";
+    if (sel.value === "") sel.value = "0";
+    return sel;
+  }
+  function checkList(items, selected, labelOf) {
+    const set = new Set((selected || []).map(String));
+    const box = h("div", { class: "checklist" }, items.map((it) => h("label", { class: "check" },
+      h("input", { type: "checkbox", value: it.id, checked: set.has(it.id) }), labelOf(it))));
+    return box;
+  }
+
+  const fields = page.fields.map((f, i) => {
+    const id = `opt-${i}`;
+    const v = values[f.key];
+    let control, read;
+    switch (f.type) {
+      case "bool":
+        control = h("input", { type: "checkbox", id, checked: !!v });
+        read = () => control.checked;
+        return [h("div", { class: "field" }, h("label", { class: "check", for: id }, control,
+          h("span", {}, f.label, f.help ? h("span", { class: "hint" }, f.help) : null))), () => [f.key, read()]];
+      case "int":
+        control = h("input", { type: "number", id, value: v ?? "", min: f.min, max: f.max });
+        read = () => (control.value === "" ? undefined : Number(control.value));
+        break;
+      case "text":
+        control = h("input", { type: "text", id, value: v ?? "" });
+        read = () => control.value;
+        break;
+      case "textarea":
+        control = h("textarea", { id, rows: 4 }); control.value = v ?? "";
+        read = () => control.value;
+        break;
+      case "lines":
+        control = h("textarea", { id, rows: 4 }); control.value = (v || []).join("\n");
+        read = () => control.value.split("\n").map((x) => x.trim()).filter(Boolean);
+        break;
+      case "select":
+        control = h("select", { id }, f.choices.map(([val, label]) => h("option", { value: val }, label)));
+        control.value = v ?? (f.choices[0] || [""])[0];
+        read = () => control.value;
+        break;
+      case "channel":
+        control = channelSelect(id, v, textChannels); read = () => control.value; break;
+      case "category":
+        control = channelSelect(id, v, scope.categories.map((c) => ({ ...c, category: "" }))); read = () => control.value;
+        [...control.querySelectorAll("option")].forEach((o) => { o.textContent = o.textContent.replace(/^# /, ""); });
+        break;
+      case "role":
+        control = roleSelect(id, v); read = () => control.value; break;
+      case "channels":
+        control = checkList(textChannels, v, (c) => `# ${c.name}`);
+        read = () => [...control.querySelectorAll("input:checked")].map((x) => x.value);
+        break;
+      case "roles":
+        control = checkList(scope.roles, v, (r) => r.name);
+        read = () => [...control.querySelectorAll("input:checked")].map((x) => x.value);
+        break;
+      case "role_map": {
+        const sels = (f.keys || []).map(([k, label], j) => [k, label, roleSelect(`${id}-${j}`, (v || {})[k])]);
+        control = h("div", { class: "rolemap" }, sels.map(([k, label, sel]) => h("div", {}, h("label", { for: sel.id }, label), sel)));
+        read = () => Object.fromEntries(sels.map(([k, , sel]) => [k, sel.value]));
+        break;
+      }
+      case "number_roles": {
+        const rows = h("div", { class: "numroles" });
+        const addRow = (n = "", role = "0") => {
+          const num = h("input", { type: "number", min: f.min ?? 1, max: f.max ?? 1000, value: n, "aria-label": "Nombre" });
+          const sel = roleSelect(`${id}-${rows.childElementCount}`, role);
+          const row = h("div", { class: "numrow" }, num, sel, h("button", { class: "btn small danger", type: "button", onclick: () => row.remove() }, "Retirer"));
+          row.read = () => [num.value, sel.value];
+          rows.append(row);
+        };
+        Object.entries(v || {}).sort((a, b) => Number(a[0]) - Number(b[0])).forEach(([n, role]) => addRow(n, String(role)));
+        control = h("div", {}, rows, h("button", { class: "btn small", type: "button", onclick: () => addRow() }, "Ajouter"));
+        read = () => Object.fromEntries([...rows.children].map((r) => r.read()).filter(([n, role]) => n && role !== "0"));
+        break;
+      }
+      default:
+        return [null, null];
+    }
+    const labelFor = ["channels", "roles", "role_map", "number_roles"].includes(f.type) ? null : id;
+    return [h("div", { class: "field" }, h("label", labelFor ? { for: labelFor } : {}, f.label), control,
+      f.help ? h("span", { class: "hint" }, f.help) : null), () => [f.key, read()]];
+  }).filter(([el]) => el);
+
+  fields.forEach(([, r]) => readers.push(r));
+  const save = h("button", { class: "btn primary", type: "submit", disabled: !running }, "Enregistrer");
+  const form = h("form", { class: "panelbox optform" },
+    h("h2", {}, page.title), page.description ? h("p", { class: "soft" }, page.description) : null,
+    fields.map(([el]) => el),
+    h("div", { class: "formactions" }, save, running ? null : h("span", { class: "soft small" }, "Démarre le bot pour enregistrer.")));
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const out = Object.fromEntries(readers.map((r) => r()).filter(([, val]) => val !== undefined));
+    act(save, async () => {
+      await api("POST", `/api/bots/${bot.id}/options`, { scope: scope.id, page: page.id, values: out });
+      scope.values[page.id] = { ...(scope.values[page.id] || {}), ...out };
+    }, "Options enregistrées");
+  });
+  return form;
 }
 
 // ---- Fichiers ----------------------------------------------------------------------------------
