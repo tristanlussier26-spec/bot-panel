@@ -2,7 +2,7 @@
 # Empêche les bots d'atteindre ton réseau local (routeur, Proxmox, tes autres VM…) et la machine du panel.
 # Ils gardent Internet (Discord) et le DNS.  À lancer en root sur la machine Docker :
 #   sudo sh scripts/isoler-reseau.sh
-# Pour que ça reste après un redémarrage : sudo apt install iptables-persistent  (puis accepter de sauvegarder)
+# Pour que ça reste après un redémarrage : voir scripts/botpanel-isolation.service
 set -eu
 
 NETWORK="${BOT_NETWORK:-botpanel-bots}"

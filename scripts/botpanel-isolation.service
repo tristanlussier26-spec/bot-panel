@@ -1,0 +1,13 @@
+# Remet l'isolation réseau des bots à chaque démarrage de la machine.
+# Installation : sudo cp scripts/botpanel-isolation.service /etc/systemd/system/ && sudo systemctl enable botpanel-isolation
+[Unit]
+Description=Bot Panel : isoler les bots du réseau local
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/bot-panel/scripts/isoler-reseau.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -71,7 +71,9 @@ Ouvre `http://IP-DE-TA-VM:8080` et connecte-toi avec Discord.
 
 ```sh
 sudo sh scripts/isoler-reseau.sh
-sudo apt install iptables-persistent   # garde les règles après un redémarrage
+# Pour que ça revienne après chaque redémarrage de la machine :
+sudo cp scripts/botpanel-isolation.service /etc/systemd/system/
+sudo systemctl enable botpanel-isolation
 ```
 
 ### Mettre à jour
