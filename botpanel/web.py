@@ -168,6 +168,8 @@ class Panel:
         })
         if request.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
+        elif request.path.endswith((".js", ".css", ".html")):
+            response.headers["Cache-Control"] = "no-cache"  # le navigateur vérifie à chaque fois : jamais d'ancienne version après une mise à jour
         return response
 
     def _same_origin(self, request: web.Request) -> bool:
