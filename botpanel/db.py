@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 """
 
 BOT_FIELDS = ("name", "language", "image", "main_file", "startup_cmd", "ram_mb", "cpu_percent",
-              "auto_restart", "wanted_running", "git_url", "git_branch", "git_token")
+              "auto_restart", "wanted_running", "git_url", "git_branch", "git_token", "port")
 
 
 class Database:
@@ -83,6 +83,11 @@ class Database:
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA foreign_keys = ON")
         await self.conn.executescript(SCHEMA)
+        # Mises à jour de la base (anciennes installations)
+        cols = {row[1] for row in await (await self.conn.execute("PRAGMA table_info(bots)")).fetchall()}
+        if "port" not in cols:
+            await self.conn.execute("ALTER TABLE bots ADD COLUMN port INTEGER")
+        await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bots_port ON bots (port)")
         await self.conn.commit()
 
     async def close(self) -> None:

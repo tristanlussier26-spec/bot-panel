@@ -284,7 +284,8 @@ class Panel:
         if bot["id"] in self.busy and status["state"] != "running":
             status["state"] = "starting"
         data = {k: bot[k] for k in ("id", "name", "language", "image", "main_file", "startup_cmd", "ram_mb",
-                                    "cpu_percent", "git_url", "git_branch", "created_at")}
+                                    "cpu_percent", "git_url", "git_branch", "created_at", "port")}
+        data["web_url"] = f"http://{self.settings.public_host}:{bot['port']}" if bot.get("port") else None
         data.update(auto_restart=bool(bot["auto_restart"]), wanted_running=bool(bot["wanted_running"]),
                     has_git_token=bool(bot["git_token"]), owner_id=str(bot["owner_id"]), status=status,
                     stats=await self.stats(bot["id"]) if status["state"] == "running" else None,
@@ -352,6 +353,8 @@ class Panel:
                 out[key] = value
         if "auto_restart" in data:
             out["auto_restart"] = int(bool(data["auto_restart"]))
+        if "web_port" in data:
+            out["web_port"] = bool(data["web_port"])
         if "git_url" in data:
             url = str(data["git_url"] or "").strip()
             branch = str(data.get("git_branch") or "").strip()
@@ -364,6 +367,14 @@ class Panel:
                 raise ApiError("Jeton Git invalide")
             out["git_token"] = token
         return out
+
+    async def free_port(self) -> int:
+        """Premier port libre de PORT_RANGE (un port par bot)."""
+        used = {b["port"] for b in await self.db.list_bots() if b.get("port")}
+        port = next((p for p in self.settings.ports if p not in used), None)
+        if port is None:
+            raise ApiError(f"Plus de port libre (plage {self.settings.port_range} dans .env)")
+        return port
 
     async def _check_limits(self, user: dict, *, ram_mb: int, exclude: str | None = None, creating: bool = False) -> None:
         if user["role"] == "admin":
@@ -380,6 +391,8 @@ class Panel:
         data = await self.body(request)
         fields = self._clean_settings(data, user)
         await self._check_limits(user, ram_mb=fields["ram_mb"], creating=True)
+        if fields.pop("web_port", False):
+            fields["port"] = await self.free_port()
         bot = await self.db.create_bot(user["id"], **fields)
         files = self.files(bot["id"])
         files.ensure()
@@ -428,6 +441,12 @@ class Panel:
         user = request[USER]
         owner = await self.db.get_user(bot["owner_id"]) if bot["owner_id"] != user["id"] else user
         fields = self._clean_settings(await self.body(request), user, bot)
+        if "web_port" in fields:
+            wanted = fields.pop("web_port")
+            if wanted and not bot.get("port"):
+                fields["port"] = await self.free_port()
+            elif not wanted and bot.get("port"):
+                fields["port"] = None
         if "ram_mb" in fields:
             await self._check_limits(owner, ram_mb=fields["ram_mb"], exclude=bot["id"])
         bot = await self.db.update_bot(bot["id"], **fields)

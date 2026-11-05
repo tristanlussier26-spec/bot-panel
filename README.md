@@ -105,6 +105,8 @@ Au démarrage, le panel installe tout seul les dépendances :
 - `requirements.txt` avec pip, pour Python ;
 - `package.json` avec npm, pour Node.js.
 
+Si ton bot a son propre site ou panel web, coche **Ouvrir un port web** dans **Réglages**. Le panel lui donne un port de `PORT_RANGE` (25500 à 25599 par défaut) et la variable `SERVER_PORT`, comme Pterodactyl. Le bot doit écouter sur ce port, et son adresse s'affiche à côté de la console.
+
 Avec une **image perso**, tu donnes l'image (ex. `eclipse-temurin:21-jre`) et la commande de démarrage (ex. `java -jar bot.jar`). Seul l'admin peut choisir une image hors de la liste `ALLOWED_IMAGES`.
 
 ### Constructeur de serveurs Discord

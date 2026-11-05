@@ -28,8 +28,11 @@ iptables -I DOCKER-USER -s "$SUBNET" -p udp --dport 53 -j ACCEPT -m comment --co
 iptables -I DOCKER-USER -s "$SUBNET" -p tcp --dport 53 -j ACCEPT -m comment --comment botpanel
 # Les bots entre eux : bloqué aussi (chacun dans son coin)
 iptables -I DOCKER-USER -s "$SUBNET" -d "$SUBNET" -j DROP -m comment --comment botpanel
+# Les réponses des bots qui ont un port web (ex. leur panel ouvert depuis ton PC) passent
+iptables -I DOCKER-USER -s "$SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN -m comment --comment botpanel
 
-# Bots -> la machine elle-même (le panel, SSH…) : bloqué
+# Bots -> la machine elle-même (le panel, SSH…) : bloqué (sauf les réponses)
 iptables -I INPUT -s "$SUBNET" -j DROP -m comment --comment botpanel
+iptables -I INPUT -s "$SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT -m comment --comment botpanel
 
 echo "C'est fait. Test : docker run --rm --network $NETWORK busybox wget -T 3 -q -O- http://192.168.2.1 (doit échouer)"

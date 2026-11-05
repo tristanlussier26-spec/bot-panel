@@ -37,6 +37,23 @@ class Settings:
     allowed_images: list[str] = field(default_factory=lambda: [x.strip() for x in os.getenv(
         "ALLOWED_IMAGES", "python:3.13-slim,python:3.12-slim,python:3.11-slim,node:22-slim,node:20-slim").split(",") if x.strip()])
     max_upload_mb: int = field(default_factory=lambda: _int("MAX_UPLOAD_MB", 100))
+    # Ports que le panel peut ouvrir pour les bots qui ont un site web ou une API (comme les « allocations » de Pterodactyl)
+    port_range: str = field(default_factory=lambda: os.getenv("PORT_RANGE", "25500-25599"))
+
+    @property
+    def ports(self) -> range:
+        try:
+            lo, hi = (int(x) for x in self.port_range.split("-", 1))
+            if 1024 <= lo <= hi <= 65535:
+                return range(lo, hi + 1)
+        except ValueError:
+            pass
+        return range(25500, 25600)
+
+    @property
+    def public_host(self) -> str:
+        from urllib.parse import urlsplit
+        return urlsplit(self.public_url).hostname or "localhost"
     # Limites par défaut d'un nouveau compte (l'admin peut les changer compte par compte)
     default_max_bots: int = field(default_factory=lambda: _int("DEFAULT_MAX_BOTS", 3))
     default_max_ram: int = field(default_factory=lambda: _int("DEFAULT_MAX_RAM_MB", 1024))

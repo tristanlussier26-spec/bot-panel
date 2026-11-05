@@ -238,6 +238,12 @@ function settingsForm(bot, onSubmit, submitLabel) {
     h("div", { class: "field" }, h("label", { class: "check" },
       h("input", { type: "checkbox", name: "auto_restart", checked: bot.auto_restart }),
       h("span", {}, "Redémarrer tout seul s'il plante", h("span", { class: "hint" }, "S'il plante deux fois en moins d'une minute, le panel arrête d'essayer.")))),
+    h("div", { class: "field" }, h("label", { class: "check" },
+      h("input", { type: "checkbox", name: "web_port", checked: !!bot.port }),
+      h("span", {}, "Ouvrir un port web",
+        h("span", { class: "hint" }, bot.port
+          ? `Port ${bot.port} : ton bot doit écouter sur la variable SERVER_PORT. Adresse : ${bot.web_url}`
+          : "Pour un bot qui a son propre site ou son panel web. Le panel lui donne un port et la variable SERVER_PORT.")))),
   );
   if (isNew) {
     form.append(h("details", { class: "field" }, h("summary", {}, "Déployer depuis GitHub (facultatif)"),
@@ -261,7 +267,7 @@ function settingsForm(bot, onSubmit, submitLabel) {
       image: lang === "custom" ? fd.get("image_custom") : fd.get("image"),
       main_file: fd.get("main_file") || (lang === "node" ? "index.js" : "main.py"),
       startup_cmd: fd.get("startup_cmd"), ram_mb: Number(fd.get("ram_mb")), cpu_percent: Number(fd.get("cpu_percent")),
-      auto_restart: fd.get("auto_restart") === "on",
+      auto_restart: fd.get("auto_restart") === "on", web_port: fd.get("web_port") === "on",
     };
     if (isNew && fd.get("git_url")) Object.assign(data, { git_url: fd.get("git_url"), git_branch: fd.get("git_branch"), git_token: fd.get("git_token") || null });
     act(submit, () => onSubmit(data));
@@ -349,7 +355,9 @@ function tabConsole(bot, body, setBot) {
       g("Mémoire", st ? fmtMB(st.memory_mb) : "—", `sur ${fmtMB(b.ram_mb)}`),
       g("CPU", st ? `${st.cpu_percent} %` : "—", `max ${b.cpu_percent} %`),
       g("Disque", fmtMB(b.disk_mb)),
-      g("En marche depuis", b.status.state === "running" && b.status.started_at ? since(b.status.started_at) : "—"));
+      g("En marche depuis", b.status.state === "running" && b.status.started_at ? since(b.status.started_at) : "—"),
+      b.web_url ? h("div", { class: "gauge" }, h("dt", {}, "Adresse web"),
+        h("dd", { class: "small" }, h("a", { href: b.web_url, target: "_blank", rel: "noopener" }, b.web_url))) : null);
   }
   paintGauges(bot);
 

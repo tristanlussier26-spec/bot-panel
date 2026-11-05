@@ -38,7 +38,7 @@ async def env(tmp_path):
         data_dir=tmp_path / "data", host_data_dir=None, public_url="http://127.0.0.1",
         discord_client_id="cid", discord_client_secret="secret", admin_ids={int(ADMIN)},
         discord_api=str(discord.make_url("/api/v10")), bot_network="botpanel-test",
-        default_max_bots=2, default_max_ram=512, default_max_disk=1,
+        default_max_bots=2, default_max_ram=512, default_max_disk=1, port_range="25700-25701",
     )
     panel = Panel(settings)
     server = TestServer(panel.app())
@@ -309,3 +309,44 @@ async def test_builder_endpoints(env):
     assert (await friend.get(f"/api/builder/templates/{tid}")).status == 404
     r = await friend.post("/api/builder/plan", json={"bot_id": bid, "guild_id": GUILD_ID, "content": exported}, headers=H)
     assert r.status == 404  # peut pas utiliser le bot (et le jeton) d'un autre
+
+
+async def test_web_port(env):
+    panel, client, _ = env
+    admin = await client(ADMIN)
+    bots = []
+    for name in ("Site", "Api"):
+        r = await admin.post("/api/bots", json={"name": name, "language": "python", "image": TEST_IMAGE, "starter": False,
+                                                "ram_mb": 128, "web_port": True}, headers=H)
+        bots.append(await r.json())
+    assert [b["port"] for b in bots] == [25700, 25701]
+    assert bots[0]["web_url"] == "http://127.0.0.1:25700"
+    r = await admin.post("/api/bots", json={"name": "Trop", "language": "python", "web_port": True}, headers=H)
+    assert r.status == 400 and "Plus de port libre" in (await r.json())["error"]
+    # Enlever le port le libère
+    r = await admin.patch(f"/api/bots/{bots[1]['id']}", json={"web_port": False}, headers=H)
+    assert (await r.json())["port"] is None
+    if not await docker_ready():
+        pytest.skip(f"Docker ou l'image {TEST_IMAGE} indisponible")
+    bid = bots[0]["id"]
+    await admin.put(f"/api/bots/{bid}/files/content", json={"path": "main.py", "content": (
+        "import os, http.server\n"
+        "class H(http.server.BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        self.send_response(200); self.end_headers(); self.wfile.write(b'panel du bot ok')\n"
+        "print('écoute sur', os.environ['SERVER_PORT'], flush=True)\n"
+        "http.server.HTTPServer(('0.0.0.0', int(os.environ['SERVER_PORT'])), H).serve_forever()\n")}, headers=H)
+    r = await admin.post(f"/api/bots/{bid}/power", json={"action": "start"}, headers=H)
+    assert (await r.json())["status"]["state"] == "running"
+    import aiohttp
+    async with aiohttp.ClientSession() as http:
+        for _ in range(40):
+            try:
+                async with http.get("http://127.0.0.1:25700/") as resp:
+                    assert await resp.text() == "panel du bot ok"
+                    break
+            except aiohttp.ClientError:
+                await asyncio.sleep(0.25)
+        else:
+            raise AssertionError("le site du bot répond pas sur son port")
+    await admin.post(f"/api/bots/{bid}/power", json={"action": "kill"}, headers=H)

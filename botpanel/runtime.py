@@ -164,9 +164,12 @@ class BotRuntime:
             "PATH": f"{WORKDIR}/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "BOT_ID": bot["id"],
         }
+        port = bot.get("port")
+        if port:  # mêmes noms que Pterodactyl : le bot écoute sur SERVER_PORT
+            base_env.update(SERVER_PORT=str(port), SERVER_IP="0.0.0.0")
         all_env = {**env, **base_env}
         ram = int(bot["ram_mb"]) * 1024 * 1024
-        return {
+        config = {
             "Image": bot["image"],
             "Cmd": ["/bin/sh", "-c", startup_command(bot)],
             "WorkingDir": WORKDIR,
@@ -191,6 +194,10 @@ class BotRuntime:
                 "LogConfig": {"Type": "json-file", "Config": {"max-size": "5m", "max-file": "2"}},
             },
         }
+        if port:
+            config["ExposedPorts"] = {f"{port}/tcp": {}}
+            config["HostConfig"]["PortBindings"] = {f"{port}/tcp": [{"HostPort": str(port)}]}
+        return config
 
     async def _get(self, bot_id: str):
         try:
