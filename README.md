@@ -39,7 +39,7 @@ curl -fsSL https://get.docker.com | sudo sh
 **2. Télécharger le panel** :
 
 ```sh
-sudo git clone https://github.com/TON-COMPTE/bot-panel.git /opt/bot-panel
+sudo git clone https://github.com/tristanlussier26-spec/bot-panel.git /opt/bot-panel
 cd /opt/bot-panel
 sudo cp .env.example .env
 ```
