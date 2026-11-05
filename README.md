@@ -209,6 +209,8 @@ Types de champs :
 
 Dans `state.json`, chaque serveur a la forme `{"id", "name", "channels": [{"id", "name", "category"}], "categories", "roles", "values": {"page": {"clé": valeur}}, "managers": ["id discord", …]}`. Le fichier a aussi `"app_id"` (l'ID de l'application du bot), qui sert au bouton d'invitation. Les IDs Discord s'écrivent en texte.
 
+Les boutons **Exporter** et **Importer**, sous les pages, copient toutes les options d'un serveur dans un fichier `.json`. Tu peux ensuite les remettre sur un autre serveur ou les restaurer plus tard. À l'import, les salons et les rôles sont retrouvés par leur nom. Ceux qui existent pas sur le serveur sont laissés vides, et le panel les nomme.
+
 Le bot vérifie lui-même ce qu'il reçoit. Le bot amour en est un exemple complet (`utils/panelbridge.py`).
 
 ## Mettre le panel sur Internet

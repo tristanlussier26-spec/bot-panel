@@ -422,7 +422,7 @@ function since(iso) {
 }
 
 // ---- Options du bot (réglages décrits par le bot) -----------------------------------------------
-async function tabOptions(bot, body, onData) {
+async function tabOptions(bot, body, onData, notice) {
   const data = await api("GET", `/api/bots/${bot.id}/options`);
   if (onData) onData(data);
   const inviteBtn = data.invite ? h("a", { class: "btn", href: data.invite, target: "_blank", rel: "noopener" }, "Inviter sur un serveur") : null;
@@ -460,17 +460,126 @@ async function tabOptions(bot, body, onData) {
       type: "button", class: p.id === pageId ? "current" : null, "aria-current": p.id === pageId ? "page" : null,
       onclick: () => { pageId = p.id; sessionStorage.setItem(`page:${bot.id}`, pageId); render(); },
     }, p.icon ? h("span", { "aria-hidden": "true" }, p.icon) : null, p.title)));
+    const fileInput = h("input", { type: "file", accept: ".json,application/json", hidden: true });
+    const importBtn = h("button", { class: "btn small", type: "button", disabled: !data.running, onclick: () => fileInput.click() }, "Importer");
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      fileInput.value = "";
+      if (!file || !scope) return;
+      let parsed;
+      try { parsed = JSON.parse(await file.text()); } catch { toast("Ce fichier est pas un fichier d'options valide", true); return; }
+      if (!confirm(`Remplacer les options de « ${scope.name} » par celles du fichier ?`)) return;
+      const result = await act(importBtn, () => importOptions(bot, data, scope, parsed));
+      if (!result) return;
+      await new Promise((r) => setTimeout(r, 1500));  // le temps que le bot réécrive son état
+      const lines = [`${result.done} page(s) importée(s) sur « ${scope.name} ».`];
+      if (result.missing.length) lines.push(`Introuvables ici, laissés vides : ${result.missing.join(", ")}.`);
+      result.errors.forEach((e) => lines.push(e));
+      tabOptions(bot, body, onData, { text: lines.join(" "), bad: result.errors.length > 0 });
+    });
     fill(body,
       warn ? h("div", { class: "banner" }, warn) : null,
+      notice ? h("p", { class: `note ${notice.bad ? "bad" : ""}`, role: "status" }, notice.text) : null,
       h("div", { class: "optgrid" },
         h("div", {},
           scopeSel ? h("div", { class: "field" }, h("label", { for: "opt-scope" }, "Serveur Discord"), scopeSel) : null,
           inviteBtn ? h("div", { class: "field" }, inviteBtn) : null,
           scope && scope.info.length ? h("dl", { class: "optinfo" }, scope.info.map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))) : null,
-          nav),
+          nav,
+          scope ? h("div", { class: "optfile" },
+            h("p", { class: "small" }, h("strong", {}, "Fichier de configuration"),
+              h("span", { class: "hint" }, "Exporte les options de ce serveur, ou importe celles d'un autre serveur. Les salons et les rôles sont retrouvés par leur nom.")),
+            h("div", { class: "formactions" },
+              h("button", { class: "btn small", type: "button", onclick: () => exportOptions(data, scope) }, "Exporter"), importBtn, fileInput)) : null),
         page && scope ? optionsForm(bot, data, scope, page, data.running) : h("p", { class: "soft" }, "Rien à régler.")));
   }
   render();
+}
+
+// ---- Fichier de configuration : exporter / importer les options d'un serveur -------------------
+const CHANNEL_TYPES = ["channel", "category", "channels"];
+const ROLE_TYPES = ["role", "roles", "role_map", "number_roles"];
+
+function refIds(f, v) {
+  if (v === null || v === undefined) return [];
+  if (["channel", "category", "role"].includes(f.type)) return v && String(v) !== "0" ? [String(v)] : [];
+  if (["channels", "roles"].includes(f.type)) return (Array.isArray(v) ? v : []).map(String);
+  if (["role_map", "number_roles"].includes(f.type)) return Object.values(v || {}).map(String).filter((x) => x !== "0");
+  return [];
+}
+
+function exportOptions(data, scope) {
+  const chanName = new Map([...scope.channels, ...scope.categories].map((c) => [c.id, c.name]));
+  const roleName = new Map(scope.roles.map((r) => [r.id, r.name]));
+  const names = { channels: {}, roles: {} };
+  const pages = {};
+  for (const p of data.pages) {
+    const vals = scope.values[p.id];
+    if (!vals) continue;
+    pages[p.id] = {};
+    for (const f of p.fields) {
+      if (!(f.key in vals)) continue;
+      pages[p.id][f.key] = vals[f.key];
+      for (const id of refIds(f, vals[f.key])) {
+        if (CHANNEL_TYPES.includes(f.type) && chanName.has(id)) names.channels[id] = chanName.get(id);
+        if (ROLE_TYPES.includes(f.type) && roleName.has(id)) names.roles[id] = roleName.get(id);
+      }
+    }
+  }
+  const file = { format: "botpanel-options", version: 1, bot: data.bot_name || data.title, server: scope.name,
+    exported: new Date().toISOString(), pages, names };
+  const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+  const a = h("a", { href: URL.createObjectURL(blob), download: `options-${scope.name.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase()}.json` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast("Fichier d'options téléchargé");
+}
+
+async function importOptions(bot, data, scope, file) {
+  if (!file || file.format !== "botpanel-options" || typeof file.pages !== "object") {
+    throw new ApiError("Ce fichier est pas un fichier d'options de Bot Panel");
+  }
+  // Salons, catégories et rôles de CE serveur, par ID et par nom (un salon et une catégorie peuvent avoir le même nom)
+  const pools = { channel: scope.channels, category: scope.categories, role: scope.roles };
+  const ids = Object.fromEntries(Object.entries(pools).map(([k, list]) => [k, new Set(list.map((x) => x.id))]));
+  const byName = Object.fromEntries(Object.entries(pools).map(([k, list]) => [k, new Map(list.map((x) => [x.name.toLowerCase(), x.id]))]));
+  const names = file.names || {};
+  const missing = new Set();
+  const mapId = (raw, kind) => {
+    const id = String(raw ?? "");
+    if (!id || id === "0") return "0";
+    if (ids[kind].has(id)) return id;
+    const name = ((kind === "role" ? names.roles : names.channels) || {})[id];
+    const found = name && byName[kind].get(String(name).toLowerCase());
+    if (found) return found;
+    missing.add(`${kind === "role" ? "@" : "#"}${name || id}`);
+    return "0";
+  };
+  let done = 0;
+  const errors = [];
+  for (const p of data.pages) {
+    const src = file.pages[p.id];
+    if (!src || typeof src !== "object") continue;
+    const values = {};
+    for (const f of p.fields) {
+      if (!(f.key in src)) continue;
+      const v = src[f.key];
+      const kind = f.type === "category" ? "category" : CHANNEL_TYPES.includes(f.type) ? "channel" : "role";
+      if (["channel", "category", "role"].includes(f.type)) values[f.key] = mapId(v, kind);
+      else if (["channels", "roles"].includes(f.type)) values[f.key] = (Array.isArray(v) ? v : []).map((x) => mapId(x, kind)).filter((x) => x !== "0");
+      else if (f.type === "role_map") values[f.key] = Object.fromEntries(Object.entries(v || {}).map(([k, x]) => [k, mapId(x, "role")]));
+      else if (f.type === "number_roles") values[f.key] = Object.fromEntries(Object.entries(v || {}).map(([n, x]) => [n, mapId(x, "role")]).filter(([, x]) => x !== "0"));
+      else values[f.key] = v;
+    }
+    try {
+      await api("POST", `/api/bots/${bot.id}/options`, { scope: scope.id, page: p.id, values });
+      done += 1;
+    } catch (e) {
+      errors.push(`${p.title} : ${e.message}`);
+    }
+  }
+  return { done, errors, missing: [...missing] };
 }
 
 function optionsForm(bot, data, scope, page, running) {
