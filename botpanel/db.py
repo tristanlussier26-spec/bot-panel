@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 """
 
 BOT_FIELDS = ("name", "language", "image", "main_file", "startup_cmd", "ram_mb", "cpu_percent",
-              "auto_restart", "wanted_running", "git_url", "git_branch", "git_token", "port")
+              "auto_restart", "wanted_running", "git_url", "git_branch", "git_token", "port", "shared")
 
 
 class Database:
@@ -87,6 +87,8 @@ class Database:
         cols = {row[1] for row in await (await self.conn.execute("PRAGMA table_info(bots)")).fetchall()}
         if "port" not in cols:
             await self.conn.execute("ALTER TABLE bots ADD COLUMN port INTEGER")
+        if "shared" not in cols:
+            await self.conn.execute("ALTER TABLE bots ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
         await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bots_port ON bots (port)")
         await self.conn.commit()
 

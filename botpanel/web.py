@@ -72,6 +72,7 @@ class Panel:
         r.add_post("/api/bots/{bot}/command", self.command)
         r.add_get("/api/bots/{bot}/console", self.console)
         r.add_get("/api/bots/{bot}/activity", self.bot_activity)
+        r.add_get("/api/shared", self.shared_list)
         r.add_get("/api/bots/{bot}/options", self.options_get)
         r.add_post("/api/bots/{bot}/options", self.options_save)
         r.add_get("/api/bots/{bot}/env", self.get_env)
@@ -290,7 +291,7 @@ class Panel:
         data["web_url"] = f"http://{self.settings.public_host}:{bot['port']}" if bot.get("port") else None
         data.update(auto_restart=bool(bot["auto_restart"]), wanted_running=bool(bot["wanted_running"]),
                     has_git_token=bool(bot["git_token"]), owner_id=str(bot["owner_id"]), status=status,
-                    has_options=options.has_schema(self.files(bot["id"])),
+                    has_options=options.has_schema(self.files(bot["id"])), shared=bool(bot.get("shared")),
                     stats=await self.stats(bot["id"]) if status["state"] == "running" else None,
                     disk_mb=round(await self.disk_bytes(bot["id"]) / 1024 / 1024, 1))
         if details:
@@ -358,6 +359,8 @@ class Panel:
             out["auto_restart"] = int(bool(data["auto_restart"]))
         if "web_port" in data:
             out["web_port"] = bool(data["web_port"])
+        if "shared" in data:
+            out["shared"] = int(bool(data["shared"]))
         if "git_url" in data:
             url = str(data["git_url"] or "").strip()
             branch = str(data.get("git_branch") or "").strip()
@@ -480,8 +483,8 @@ class Panel:
         await self.runtime.start(bot, env)
 
     async def power(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)  # d'abord les droits, ensuite Docker
         self.need_docker()
-        bot = await self.bot_for(request)
         action = (await self.body(request)).get("action")
         if action not in ("start", "stop", "restart", "kill"):
             raise ApiError("Action invalide")
@@ -509,8 +512,8 @@ class Panel:
         return web.json_response(await self.bot_public(await self.db.get_bot(bot["id"])))
 
     async def command(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)  # d'abord les droits, ensuite Docker
         self.need_docker()
-        bot = await self.bot_for(request)
         text = str((await self.body(request)).get("command", ""))
         if not text.strip() or len(text) > 2000:
             raise ApiError("Commande vide ou trop longue")
@@ -524,8 +527,8 @@ class Panel:
 
     # ---- Console en direct --------------------------------------------------------------------
     async def console(self, request: web.Request) -> web.WebSocketResponse:
+        bot = await self.bot_for(request)  # d'abord les droits, ensuite Docker
         self.need_docker()
-        bot = await self.bot_for(request)
         bot_id = bot["id"]
         ws = web.WebSocketResponse(heartbeat=30, max_msg_size=8192)
         await ws.prepare(request)
@@ -585,15 +588,46 @@ class Panel:
         return ws
 
     # ---- Options du bot (réglages décrits par le bot lui-même) --------------------------------
+    async def bot_for_options(self, request: web.Request) -> tuple[dict, bool]:
+        """(bot, accès complet). Un bot partagé est accessible aux autres, mais seulement pour leurs serveurs."""
+        bot = await self.db.get_bot(request.match_info["bot"])
+        user = request[USER]
+        if bot is None:
+            raise ApiError("Bot introuvable", 404)
+        if bot["owner_id"] == user["id"] or user["role"] == "admin":
+            return bot, True
+        if bot.get("shared"):
+            return bot, False
+        raise ApiError("Bot introuvable", 404)
+
+    async def shared_list(self, request: web.Request) -> web.Response:
+        user = request[USER]
+        names = {u["id"]: u["name"] for u in await self.db.list_users()}
+        out = []
+        for bot in await self.db.list_bots():
+            if not bot.get("shared"):
+                continue
+            mine, invite = await asyncio.to_thread(options.managed_scopes, self.files(bot["id"]), str(user["id"]))
+            status = await self.runtime.status(bot["id"]) if self.docker_ok else {"state": "unknown"}
+            out.append({"id": bot["id"], "name": bot["name"], "owner_name": names.get(bot["owner_id"], "?"),
+                        "running": status["state"] == "running", "invite": invite, "servers": mine,
+                        "yours": bot["owner_id"] == user["id"]})
+        return web.json_response(out)
+
     async def options_get(self, request: web.Request) -> web.Response:
-        bot = await self.bot_for(request)
-        data = await asyncio.to_thread(options.load, self.files(bot["id"]))
+        bot, full = await self.bot_for_options(request)
+        only = None if full else str(request[USER]["id"])
+        data = await asyncio.to_thread(options.load, self.files(bot["id"]), only_for=only)
         status = await self.runtime.status(bot["id"]) if self.docker_ok else {"state": "unknown"}
-        return web.json_response({**data, "running": status["state"] == "running"})
+        return web.json_response({**data, "running": status["state"] == "running", "bot_name": bot["name"], "full": full})
 
     async def options_save(self, request: web.Request) -> web.Response:
-        bot = await self.bot_for(request)
+        bot, full = await self.bot_for_options(request)
         data = await self.body(request)
+        if not full:
+            mine, _ = await asyncio.to_thread(options.managed_scopes, self.files(bot["id"]), str(request[USER]["id"]))
+            if str(data.get("scope", "")) not in {sc["id"] for sc in mine}:
+                raise ApiError("Tu gères pas ce serveur (il faut la permission « Gérer le serveur » sur Discord)", 403)
         status = await self.runtime.status(bot["id"]) if self.docker_ok else {"state": "unknown"}
         if status["state"] != "running":
             raise ApiError("Démarre le bot pour changer ses options : c'est lui qui les vérifie et les applique")

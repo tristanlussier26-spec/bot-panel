@@ -120,19 +120,41 @@ def clean_state(raw: Any) -> dict:
             "values": sc.get("values") if isinstance(sc.get("values"), dict) else {},
             "info": [[_s(i[0], 60), _s(i[1], 200)] for i in (sc.get("info") or [])[:12]
                      if isinstance(i, (list, tuple)) and len(i) == 2],
+            # Comptes Discord qui gèrent ce serveur (pour les bots partagés)
+            "managers": [_id(m) for m in (sc.get("managers") or [])[:5000] if _id(m)],
         })
     updated = raw.get("updated")
-    return {"updated": updated if isinstance(updated, (int, float)) else 0, "scopes": scopes}
+    return {"updated": updated if isinstance(updated, (int, float)) else 0, "scopes": scopes,
+            "app_id": _id(raw.get("app_id")) or None}
 
 
-def load(files: BotFiles) -> dict:
+def invite_url(app_id: str | None) -> str | None:
+    if not app_id:
+        return None
+    return f"https://discord.com/oauth2/authorize?client_id={app_id}&scope=bot+applications.commands&permissions=8"
+
+
+def load(files: BotFiles, *, only_for: str | None = None) -> dict:
+    """Schéma + serveurs. only_for : ID Discord d'un compte qui voit seulement les serveurs qu'il gère."""
     raw = _read_json(files, "schema.json", MAX_SCHEMA)
     if raw is None:
         return {"available": False}
     schema = clean_schema(raw)
     state = clean_state(_read_json(files, "state.json", MAX_STATE))
-    return {"available": True, **schema, "scopes": state["scopes"], "updated": state["updated"],
-            "stale": time.time() - state["updated"] > STALE_AFTER}
+    scopes = state["scopes"]
+    if only_for is not None:
+        scopes = [sc for sc in scopes if only_for in sc["managers"]]
+    for sc in scopes:
+        sc.pop("managers", None)  # les IDs des autres restent dans le bot
+    return {"available": True, **schema, "scopes": scopes, "updated": state["updated"],
+            "stale": time.time() - state["updated"] > STALE_AFTER, "invite": invite_url(state["app_id"])}
+
+
+def managed_scopes(files: BotFiles, user_id: str) -> tuple[list[dict], str | None]:
+    """Serveurs d'un bot partagé que ce compte gère, et le lien pour inviter le bot."""
+    state = clean_state(_read_json(files, "state.json", MAX_STATE))
+    mine = [{"id": sc["id"], "name": sc["name"], "icon": sc["icon"]} for sc in state["scopes"] if user_id in sc["managers"]]
+    return mine, invite_url(state["app_id"])
 
 
 async def send(files: BotFiles, scope: str, page: str, values: dict, user: dict, *, timeout: float = 10) -> dict:

@@ -298,6 +298,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--act); outli
 .envrow { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr) auto auto; gap: 0.6rem; align-items: center; margin-bottom: 0.55rem; }
 .envrow input[name=key] { font-variation-settings: var(--mono); }
 
+/* ---- Bots partagés ---- */
+.shared { padding: 1.1rem 1.25rem; border-top: 1px solid var(--line); }
+.shared:first-child { border-top: 0; }
+.shared-head { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 1.25rem; align-items: center; }
+.shared-servers { list-style: none; margin: 0.9rem 0 0 calc(22px + 1.25rem); padding: 0; display: grid; gap: 0.4rem; }
+.shared-servers li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.4rem 0.75rem; background: #fff; border: 1px solid var(--line); border-radius: var(--r-ctl); }
+.shared-none { margin: 0.6rem 0 0 calc(22px + 1.25rem); }
+
 /* ---- Options du bot ---- */
 .optgrid { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 1.5rem; align-items: start; }
 .optnav { display: grid; gap: 0.15rem; }
@@ -407,6 +415,9 @@ details.help pre { font-variation-settings: var(--mono); font-size: 0.84rem; bac
   .account span { display: none; }
   .slot { grid-template-columns: 18px minmax(0, 1fr) auto; }
   .slot-mid, .slot-meter { display: none; }
+  .shared-head { grid-template-columns: 18px minmax(0, 1fr); }
+  .shared-head .btn { grid-column: 1 / -1; }
+  .shared-servers, .shared-none { margin-left: 0; }
   .bothead { grid-template-columns: 1fr; }
   .power { justify-content: flex-start; }
   .envrow { grid-template-columns: 1fr 1fr; }

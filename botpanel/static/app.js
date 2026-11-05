@@ -111,13 +111,16 @@ async function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
   const section = parts[0] || "";
   document.querySelectorAll("[data-nav]").forEach((a) => {
-    a.classList.toggle("current", a.dataset.nav === (section === "bot" || section === "nouveau" || !section ? "bots" : section));
+    const nav = section === "bot" || section === "nouveau" || !section ? "bots" : section === "partage" ? "partages" : section;
+    a.classList.toggle("current", a.dataset.nav === nav);
   });
   mount(h("p", { class: "loading" }, "Chargement…"));
   try {
     if (!section) await pageBots();
     else if (section === "nouveau") await pageNewBot();
     else if (section === "bot" && parts[1]) await pageBot(parts[1], parts[2] || "console");
+    else if (section === "partages") await pageShared();
+    else if (section === "partage" && parts[1]) await pageSharedOptions(parts[1]);
     else if (section === "serveurs") await pageBuilder();
     else if (section === "admin" && ME.role === "admin") await pageAdmin();
     else mount(h("div", { class: "empty" }, h("h2", {}, "Page introuvable"), h("a", { class: "btn", href: "#/" }, "Retour aux bots")));
@@ -239,6 +242,10 @@ function settingsForm(bot, onSubmit, submitLabel) {
       h("input", { type: "checkbox", name: "auto_restart", checked: bot.auto_restart }),
       h("span", {}, "Redémarrer tout seul s'il plante", h("span", { class: "hint" }, "S'il plante deux fois en moins d'une minute, le panel arrête d'essayer.")))),
     h("div", { class: "field" }, h("label", { class: "check" },
+      h("input", { type: "checkbox", name: "shared", checked: !!bot.shared }),
+      h("span", {}, "Bot partagé",
+        h("span", { class: "hint" }, "Les comptes approuvés le voient dans « Bots partagés » : ils peuvent l'inviter sur leurs serveurs et régler ses options, seulement sur les serveurs où ils ont « Gérer le serveur ». Ils voient pas sa console, ses fichiers ni ses variables.")))),
+    h("div", { class: "field" }, h("label", { class: "check" },
       h("input", { type: "checkbox", name: "web_port", checked: !!bot.port }),
       h("span", {}, "Ouvrir un port web",
         h("span", { class: "hint" }, bot.port
@@ -267,7 +274,7 @@ function settingsForm(bot, onSubmit, submitLabel) {
       image: lang === "custom" ? fd.get("image_custom") : fd.get("image"),
       main_file: fd.get("main_file") || (lang === "node" ? "index.js" : "main.py"),
       startup_cmd: fd.get("startup_cmd"), ram_mb: Number(fd.get("ram_mb")), cpu_percent: Number(fd.get("cpu_percent")),
-      auto_restart: fd.get("auto_restart") === "on", web_port: fd.get("web_port") === "on",
+      auto_restart: fd.get("auto_restart") === "on", web_port: fd.get("web_port") === "on", shared: fd.get("shared") === "on",
     };
     if (isNew && fd.get("git_url")) Object.assign(data, { git_url: fd.get("git_url"), git_branch: fd.get("git_branch"), git_token: fd.get("git_token") || null });
     act(submit, () => onSubmit(data));
@@ -415,8 +422,10 @@ function since(iso) {
 }
 
 // ---- Options du bot (réglages décrits par le bot) -----------------------------------------------
-async function tabOptions(bot, body) {
+async function tabOptions(bot, body, onData) {
   const data = await api("GET", `/api/bots/${bot.id}/options`);
+  if (onData) onData(data);
+  const inviteBtn = data.invite ? h("a", { class: "btn", href: data.invite, target: "_blank", rel: "noopener" }, "Inviter sur un serveur") : null;
   if (!data.available) {
     fill(body, h("div", { class: "panelbox" }, h("h2", {}, "Ce bot a pas d'options"),
       h("p", { class: "soft" }, "Un bot peut décrire ses réglages dans le fichier .botpanel/schema.json : Bot Panel affiche alors ici un formulaire pour les changer. Le README explique comment.")));
@@ -433,7 +442,10 @@ async function tabOptions(bot, body) {
 
   if (data.scope === "guild" && !scopes.length) {
     fill(body, warn ? h("div", { class: "banner" }, warn) : null, h("div", { class: "panelbox" }, h("h2", {}, "Aucun serveur"),
-      h("p", { class: "soft" }, "Le bot est sur aucun serveur Discord pour l'instant, ou il a pas encore démarré. Invite-le sur un serveur, puis reviens ici.")));
+      h("p", { class: "soft" }, data.full
+        ? "Le bot est sur aucun serveur Discord pour l'instant, ou il a pas encore démarré. Invite-le sur un serveur, puis reviens ici."
+        : "Le bot est sur aucun serveur que tu gères. Invite-le sur ton serveur (il faut la permission « Gérer le serveur »), puis reviens ici : ça prend environ 30 secondes."),
+      inviteBtn ? h("div", { class: "formactions" }, inviteBtn) : null));
     return;
   }
 
@@ -453,6 +465,7 @@ async function tabOptions(bot, body) {
       h("div", { class: "optgrid" },
         h("div", {},
           scopeSel ? h("div", { class: "field" }, h("label", { for: "opt-scope" }, "Serveur Discord"), scopeSel) : null,
+          inviteBtn ? h("div", { class: "field" }, inviteBtn) : null,
           scope && scope.info.length ? h("dl", { class: "optinfo" }, scope.info.map(([k, v]) => h("div", {}, h("dt", {}, k), h("dd", {}, v)))) : null,
           nav),
         page && scope ? optionsForm(bot, data, scope, page, data.running) : h("p", { class: "soft" }, "Rien à régler.")));
@@ -586,6 +599,34 @@ function optionsForm(bot, data, scope, page, running) {
     }, "Options enregistrées");
   });
   return form;
+}
+
+// ---- Bots partagés (comme DraftBot : on invite et on règle, sans toucher au portail Discord) ------
+async function pageShared() {
+  const bots = await api("GET", "/api/shared");
+  const head = h("div", { class: "pagehead" }, h("div", {}, h("h1", {}, "Bots partagés"),
+    h("p", { class: "soft" }, "Des bots déjà prêts : invite-les sur ton serveur et règle-les ici. Tu vois seulement les serveurs où tu as la permission « Gérer le serveur ».")));
+  if (!bots.length) {
+    mount(head, h("div", { class: "rack" }, h("div", { class: "empty" }, h("h2", {}, "Aucun bot partagé"),
+      h("p", { class: "soft" }, ME.role === "admin" ? "Pour partager un de tes bots, coche « Bot partagé » dans ses Réglages." : "L'admin a pas encore partagé de bot."))));
+    return;
+  }
+  mount(head, h("div", { class: "rack" }, bots.map((b) => h("div", { class: "shared" },
+    h("div", { class: "shared-head" }, lamp(b.running ? "on" : "off"),
+      h("div", {}, h("div", { class: "slot-name" }, b.name), h("div", { class: "slot-sub" }, b.running ? "En marche" : "Arrêté", b.yours ? " (à toi)" : ` (à ${b.owner_name})`)),
+      b.invite ? h("a", { class: "btn", href: b.invite, target: "_blank", rel: "noopener" }, "Inviter sur un serveur") : null),
+    b.servers.length
+      ? h("ul", { class: "shared-servers" }, b.servers.map((sv) => h("li", {},
+          h("span", {}, sv.name), h("a", { class: "btn small primary", href: `#/partage/${b.id}`,
+            onclick: () => sessionStorage.setItem(`scope:${b.id}`, sv.id) }, "Régler"))))
+      : h("p", { class: "soft small shared-none" }, "Il est sur aucun de tes serveurs. Invite-le, puis recharge cette page dans 30 secondes.")))));
+}
+
+async function pageSharedOptions(id) {
+  const title = h("h1", {}, "Options");
+  const body = h("div", {});
+  mount(h("a", { class: "back", href: "#/partages" }, "Retour aux bots partagés"), h("div", { class: "pagehead" }, h("div", {}, title)), body);
+  await tabOptions({ id }, body, (data) => { title.textContent = data.bot_name; });
 }
 
 // ---- Fichiers ----------------------------------------------------------------------------------

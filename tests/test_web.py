@@ -412,3 +412,60 @@ async def test_bot_options(env):
         task.cancel()
         panel.docker_ok = False  # pas de vrai Docker dans ce test
     assert not list((root / "outbox").iterdir())  # le panel fait le ménage
+
+
+async def test_shared_bot(env):
+    """Bot partagé : un ami l'invite et le règle, seulement sur les serveurs qu'il gère."""
+    panel, client, _ = env
+    admin = await client(ADMIN)
+    bid = (await (await admin.post("/api/bots", json={"name": "Amour", "language": "python"}, headers=H)).json())["id"]
+    root = panel.settings.bots_dir / bid / ".botpanel"
+    (root / "inbox").mkdir(parents=True)
+    (root / "outbox").mkdir()
+    (root / "schema.json").write_text(json.dumps({"pages": [{"id": "p", "title": "P", "fields": [{"key": "a", "type": "bool"}]}]}))
+    (root / "state.json").write_text(json.dumps({"updated": __import__("time").time(), "app_id": "900", "scopes": [
+        {"id": "1", "name": "Serveur d'un ami", "managers": [FRIEND], "values": {}},
+        {"id": "2", "name": "Serveur à Tristan", "managers": [ADMIN], "values": {}}]}))
+    await admin.post("/api/admin/users", json={"id": FRIEND}, headers=H)
+    friend = await client(FRIEND)
+
+    # Pas encore partagé : invisible
+    assert await (await friend.get("/api/shared")).json() == []
+    assert (await friend.get(f"/api/bots/{bid}/options")).status == 404
+    r = await admin.patch(f"/api/bots/{bid}", json={"shared": True}, headers=H)
+    assert (await r.json())["shared"] is True
+
+    shared = await (await friend.get("/api/shared")).json()
+    assert shared[0]["servers"] == [{"id": "1", "name": "Serveur d'un ami", "icon": None}]
+    assert "client_id=900" in shared[0]["invite"]
+    data = await (await friend.get(f"/api/bots/{bid}/options")).json()
+    assert [sc["id"] for sc in data["scopes"]] == ["1"] and data["full"] is False
+    assert "managers" not in data["scopes"][0]
+    full = await (await admin.get(f"/api/bots/{bid}/options")).json()
+    assert [sc["id"] for sc in full["scopes"]] == ["1", "2"]
+    # Le reste du bot reste privé
+    for path in ("", "/files", "/env", "/console", "/activity"):
+        assert (await friend.get(f"/api/bots/{bid}{path}")).status == 404, path
+
+    async def running(_):
+        return {"state": "running", "exit_code": 0, "oom": False}
+    panel.runtime.status = running
+    panel.docker_ok = True
+
+    async def fake_bot():
+        while True:
+            for req in (root / "inbox").glob("*.json"):
+                body = json.loads(req.read_text())
+                req.unlink()
+                (root / "outbox" / f"{body['id']}.json").write_text(json.dumps({"ok": True}))
+            await asyncio.sleep(0.05)
+
+    task = asyncio.create_task(fake_bot())
+    try:
+        r = await friend.post(f"/api/bots/{bid}/options", json={"scope": "2", "page": "p", "values": {"a": True}}, headers=H)
+        assert r.status == 403  # le serveur de quelqu'un d'autre
+        r = await friend.post(f"/api/bots/{bid}/options", json={"scope": "1", "page": "p", "values": {"a": True}}, headers=H)
+        assert (await r.json())["ok"] is True
+    finally:
+        task.cancel()
+        panel.docker_ok = False

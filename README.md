@@ -164,6 +164,14 @@ Voici les règles du modèle :
 - **Permissions d'un salon** : il reprend celles de sa catégorie. Ce que tu mets dans un salon pour un rôle remplace ce que dit la catégorie pour ce rôle. `Rôle: {}` veut dire « rien de spécial pour ce rôle ici ».
 - **Noms de permissions** : ce sont ceux de discord.py (`view_channel`, `manage_roles`, etc.). La liste complète est dans la page.
 
+### Bots partagés
+
+Coche **Bot partagé** dans les Réglages d'un bot pour qu'il marche comme DraftBot pour tes amis.
+
+Les comptes approuvés le voient dans **Bots partagés**. Ils peuvent l'inviter sur leur serveur avec un bouton, puis régler ses options. Ils touchent jamais au portail Discord.
+
+Chacun voit seulement les serveurs où il a la permission « Gérer le serveur ». C'est le bot qui donne cette liste dans `state.json`, avec `managers`. Ils voient pas la console, les fichiers ni les variables du bot.
+
 ### Options du bot
 
 Un bot peut avoir son propre onglet **Options du bot** dans le panel : des pages de réglages avec des listes de salons et de rôles de chaque serveur. Pas besoin de site web ni de port. Tout passe par des fichiers dans le dossier du bot :
@@ -199,7 +207,7 @@ Types de champs :
 | `role_map` | un rôle pour chaque clé de `keys: [[clé, texte], …]` |
 | `number_roles` | des paires « nombre › rôle », comme les récompenses de niveau |
 
-Dans `state.json`, chaque serveur a la forme `{"id", "name", "channels": [{"id", "name", "category"}], "categories", "roles", "values": {"page": {"clé": valeur}}}`. Les IDs Discord s'écrivent en texte.
+Dans `state.json`, chaque serveur a la forme `{"id", "name", "channels": [{"id", "name", "category"}], "categories", "roles", "values": {"page": {"clé": valeur}}, "managers": ["id discord", …]}`. Le fichier a aussi `"app_id"` (l'ID de l'application du bot), qui sert au bouton d'invitation. Les IDs Discord s'écrivent en texte.
 
 Le bot vérifie lui-même ce qu'il reçoit. Le bot amour en est un exemple complet (`utils/panelbridge.py`).
 
