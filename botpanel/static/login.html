@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connexion · Bot Panel</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/login.js" defer></script>
+</head>
+<body class="login-page">
+  <main class="login">
+    <div class="login-lamps" aria-hidden="true"><i class="lamp on"></i><i class="lamp wait"></i><i class="lamp off"></i></div>
+    <h1 class="login-title">Bot Panel</h1>
+    <p class="login-lede">Héberge tes bots Discord, suis leur console en direct et monte tes serveurs à partir d'un modèle.</p>
+    <p class="login-state" id="state" hidden></p>
+    <a class="btn primary big" href="/auth/login">Se connecter avec Discord</a>
+    <p class="login-note">Ton compte Discord sert seulement à te reconnaître. La première fois, l'admin doit approuver ton accès.</p>
+  </main>
+</body>
+</html>

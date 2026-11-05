@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bot Panel</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="#/">Bot Panel</a>
+    <nav class="mainnav" aria-label="Sections">
+      <a href="#/" data-nav="bots">Bots</a>
+      <a href="#/serveurs" data-nav="serveurs">Serveurs Discord</a>
+      <a href="#/admin" data-nav="admin" hidden>Admin</a>
+    </nav>
+    <div class="account">
+      <img class="avatar" alt="" id="me-avatar" width="32" height="32">
+      <span id="me-name"></span>
+      <button class="link" id="logout" type="button">Déconnexion</button>
+    </div>
+  </header>
+  <main id="view" tabindex="-1"></main>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

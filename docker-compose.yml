@@ -1,0 +1,14 @@
+services:
+  botpanel:
+    build: .
+    image: botpanel:latest
+    container_name: botpanel
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      # Le panel crée et gère un conteneur Docker par bot
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Base de données, clé des sessions et dossiers des bots
+      - ./data:/data
