@@ -1,4 +1,5 @@
 """Onglet « Plugins » : catalogue (faux GitHub), téléversement d'un .zip, zips piégés, variables, retrait."""
+import asyncio
 import hashlib
 import io
 import json
@@ -53,7 +54,15 @@ async def catalog(env):  # noqa: F811
         return web.json_response({"format": 1, "plugins": [entry, broken]})
 
     async def dist(request):
-        return web.Response(body=state["zip"], content_type="application/zip")
+        # Comme sur Internet : le fichier arrive en plusieurs morceaux
+        resp = web.StreamResponse(headers={"Content-Type": "application/zip"})
+        await resp.prepare(request)
+        data = state["zip"]
+        for i in range(0, len(data), 200):
+            await resp.write(data[i:i + 200])
+            await asyncio.sleep(0.002)
+        await resp.write_eof()
+        return resp
 
     app = web.Application()
     app.router.add_get("/catalogue/index.json", index)

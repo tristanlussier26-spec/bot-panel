@@ -267,14 +267,19 @@ class Catalog:
                             continue
                         if resp.status != 200:
                             raise PluginError(f"Le catalogue répond HTTP {resp.status}")
-                        data = await resp.content.read(limit + 1)
+                        # Le fichier arrive en morceaux : on lit jusqu'au bout (read(n) donne juste ce qui est arrivé)
+                        chunks, size = [], 0
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            size += len(chunk)
+                            if size > limit:
+                                raise PluginError("Fichier du catalogue trop gros")
+                            chunks.append(chunk)
+                        data = b"".join(chunks)
                         break
                 else:
                     raise PluginError("Trop de redirections dans le catalogue")
         except (aiohttp.ClientError, TimeoutError) as e:
             raise PluginError(f"Catalogue injoignable ({type(e).__name__})") from None
-        if len(data) > limit:
-            raise PluginError("Fichier du catalogue trop gros")
         return data
 
     async def entries(self, *, force: bool = False) -> list[dict]:
