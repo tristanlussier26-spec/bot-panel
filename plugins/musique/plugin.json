@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "musique",
+  "name": "Musique",
+  "version": "1.0.0",
+  "description": "Lecteur dans les salons vocaux : liens audio, radios en ligne (liste à toi), fichiers. File d'attente, pause, passer, volume, rôle DJ, départ automatique. Pas YouTube ni Spotify (leurs conditions l'interdisent).",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "enabled_by": "musique.active",
+  "pages": [
+    {"id": "musique", "section": "musique", "title": "Musique", "icon": "🎶",
+     "description": "/jouer (lien ou fichier), /radio, /pause, /reprendre, /passer, /arreter, /volume, /file. Premier démarrage plus long : le bot installe ffmpeg.",
+     "fields": [
+       {"key": "active", "label": "Musique activée", "type": "bool", "default": false},
+       {"key": "radios", "label": "Radios (une par ligne : Nom | adresse du flux)", "type": "lines", "default": [],
+        "help": "Ex. « Ma radio | https://exemple.com/flux.mp3 ». L'adresse du flux est souvent sur le site de la radio (« écouter en direct »)."},
+       {"key": "role_dj_id", "label": "Rôle DJ", "type": "role", "default": 0,
+        "help": "Peut passer, arrêter, changer le volume. Aucun = tout le monde."},
+       {"key": "volume", "label": "Volume de départ (%)", "type": "int", "default": 50, "min": 0, "max": 100},
+       {"key": "quitter_minutes", "label": "Quitter après X minutes sans musique ou seul", "type": "int", "default": 5, "min": 1, "max": 60}
+     ]}
+  ]
+}

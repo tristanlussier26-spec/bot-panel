@@ -10,7 +10,8 @@ import pytest
 from tests.adminbuild_fakes import FakeGuild
 from tests.ngbot import Member, Role, channel_mock, make_guild, ng_bot
 
-ALL = ("adminbuild", "automod", "bienvenue", "logs", "moderation", "nationsglory", "niveaux", "tickets")
+ALL = ("adminbuild", "automod", "bienvenue", "compteurs", "evenements", "logs", "moderation", "musique",
+       "nationsglory", "niveaux", "recrutement", "roles", "tickets")
 
 
 async def settle():
@@ -28,10 +29,12 @@ async def test_template_loads_every_catalog_plugin(tmp_path):
         plugins = {p.id: p for p in bot.plugin_host.plugins}
         assert set(plugins) == set(ALL) and all(p.loaded and not p.error for p in plugins.values()), \
             {p.id: p.error for p in plugins.values()}
-        assert {p.section for p in PAGES} == {"bienvenue", "arrivee", "tickets", "niveaux", "automod", "logs", "moderation", "ng"}
+        assert {p.section for p in PAGES} == {"bienvenue", "arrivee", "tickets", "niveaux", "automod", "logs", "moderation", "ng",
+                                              "compteurs", "recrutement", "roles", "evenements", "musique"}
         assert bot.intents.members and bot.intents.message_content and not bot.intents.presences
         names = {c.qualified_name for c in bot.tree.walk_commands()}
-        assert {"aide", "ping", "lier", "rang", "warn", "ticket-panneau", "adminbuild", "verification-panneau"} <= names
+        assert {"aide", "ping", "lier", "rang", "warn", "ticket-panneau", "adminbuild", "verification-panneau", "compteurs-creer",
+                "postuler", "recrutement-panneau", "roles-panneau", "evenement creer", "jouer", "radio", "passer"} <= names
         # commandes visibles seulement là où le plugin est activé
         assert bot.optional_module("plugins.niveaux.cog") == ("niveaux", "active")
         assert bot.optional_module("plugins.tickets.cog") == ("tickets", "active")
@@ -310,3 +313,283 @@ async def test_panel_bridge_with_plugins(tmp_path, monkeypatch):
         scope = bridge._state()["scopes"][0]
         assert ["NationsGlory", "✅ test"] in scope["info"] and scope["managers"] == ["1", "111"]
         assert scope["values"]["ng"]["serveur"] == "jade"
+
+
+# ---------------------------------------------------------------- nouveaux plugins
+class Resp:
+    """interaction.response simulée."""
+
+    def __init__(self):
+        self.done, self.sent, self.edits, self.modals = False, [], [], []
+
+    def is_done(self): return self.done
+    async def defer(self, **kw): self.done = True
+    async def send_message(self, content=None, **kw): self.done = True; self.sent.append(content if content is not None else kw)
+    async def edit_message(self, **kw): self.done = True; self.edits.append(kw)
+    async def send_modal(self, modal): self.done = True; self.modals.append(modal)
+
+
+def inter(guild, user, channel=None, message=None):
+    return SimpleNamespace(guild=guild, guild_id=guild.id, user=user, channel=channel, channel_id=getattr(channel, "id", 0),
+                           response=Resp(), followup=SimpleNamespace(send=AsyncMock()), message=message)
+
+
+def said(i) -> str:
+    """Ce que le bot a répondu (réponse directe ou suivi)."""
+    if i.response.sent:
+        last = i.response.sent[-1]
+        return last if isinstance(last, str) else str(last)
+    return str(i.followup.send.call_args)
+
+
+async def test_counters(tmp_path):
+    import time as _time
+    async with ng_bot(tmp_path, "compteurs", "nationsglory") as bot:
+        cog = bot.get_cog("Counters")
+        guild, _ = make_guild()
+        guild.members = [Member(i, guild) for i in range(1, 5)] + [Member(900, guild, bot=True)]
+        guild.member_count, guild.premium_subscription_count = 5, 2
+
+        class VoiceChannel(SimpleNamespace):
+            async def edit(self, name, reason=None):
+                self.name = name
+                self.edits += 1
+
+        chans = {i: VoiceChannel(id=i, name="vieux nom", edits=0) for i in (71, 72, 73)}
+        guild.get_channel = chans.get
+        assert await bot.save_section(555, "compteurs", {"active": True, "salon_membres": 71, "salon_humains": 72,
+                                                         "salon_pays": 73, "format_pays": "🏳️ {pays} : {n}"}) == []
+        assert chans[71].name == "vieux nom"  # bot.get_guild connaît pas ce faux serveur : rien encore
+        assert await cog.refresh(guild, force=True) == 2
+        assert chans[71].name == "👥 Membres : 5" and chans[72].name == "🧑 Humains : 4"
+        assert chans[73].name == "vieux nom"  # pas encore de nombre du pays
+        bot.dispatch("ng_country_update", 555, "Amour", {f"j{i}": {} for i in range(23)})  # du plugin NationsGlory
+        await settle()
+        guild.member_count = 6
+        guild.members.append(Member(5, guild))
+        assert await cog.refresh(guild) == 1  # le pays (jamais renommé) ; les autres attendent 5 min (limite de Discord)
+        assert chans[73].name == "🏳️ Amour : 23" and chans[71].name == "👥 Membres : 5" and 555 in cog.pending
+        cog.last_edit = {k: _time.monotonic() - 301 for k in cog.last_edit}
+        assert await cog.refresh(guild) == 2 and chans[71].name == "👥 Membres : 6"
+        assert await cog.refresh(guild, force=True) == 0  # rien n'a changé : aucun appel à Discord
+
+        # /compteurs-creer : catégorie verrouillée en haut, salons créés et réglés
+        created = []
+
+        class Category(SimpleNamespace):
+            async def create_voice_channel(self, name, reason=None):
+                ch = VoiceChannel(id=100 + len(created), name=name, edits=0)
+                created.append(ch)
+                chans[ch.id] = ch
+                return ch
+
+        guild.default_role = Role(0, 0)
+        guild.create_category = AsyncMock(return_value=Category(name="📊 Statistiques"))
+        i = inter(guild, Member(1, guild, manage=True))
+        await cog.creer.callback(cog, i)
+        assert [c.name for c in created] == ["👥 Membres : 6", "🧑 Humains : 5", "🚀 Boosts : 2", "🏳️ Amour : 23"]
+        assert guild.create_category.call_args.kwargs["overwrites"][guild.default_role].connect is False
+        assert bot.cfg(555, "compteurs")["salon_boosts"] == 102 and "4 salon(s)" in said(i)
+
+
+async def test_recruitment(tmp_path):
+    async with ng_bot(tmp_path, "recrutement", "logs") as bot:
+        cog = bot.get_cog("Recruitment")
+        guild, roles = make_guild()
+        staff_channel = channel_mock(80)
+        guild.channel_map[80] = staff_channel
+        candidate = Member(42, guild, roles=[roles[1]])
+        officer = Member(7, guild, roles=[roles[5]])
+        rando = Member(8, guild)
+        guild.get_member = {42: candidate, 7: officer, 8: rando}.get
+
+        i = inter(guild, candidate)
+        await cog.start_application(i)
+        assert "fermé" in said(i)  # pas encore activé
+        assert await bot.save_section(555, "recrutement", {
+            "active": True, "salon_candidatures_id": 80, "role_staff_id": 5, "roles_acceptes": [3, 4], "role_retire_id": 1,
+            "questions": ["Ton pseudo NationsGlory", "Pourquoi nous?"], "attente_jours": 7}) == []
+        i = inter(guild, candidate)
+        await cog.start_application(i)
+        modal = i.response.modals[0]
+        assert [c.text for c in modal.children] == ["Ton pseudo NationsGlory", "Pourquoi nous?"]
+
+        i = inter(guild, candidate)
+        await cog.submit(i, [("Ton pseudo NationsGlory", "Tristan_QC"), ("Pourquoi nous?", "Parce que")])
+        sent = staff_channel.send.call_args.kwargs
+        assert sent["content"] == "<@&5>" and [c.custom_id for c in sent["view"].children] == ["rec:ok:1", "rec:no:1"]
+        assert sent["embed"].fields[0].value == "Tristan_QC"
+        i = inter(guild, candidate)
+        await cog.start_application(i)
+        assert "déjà en attente" in said(i)
+
+        message = SimpleNamespace(embeds=[sent["embed"]], edit=AsyncMock())
+        i = inter(guild, rando, message=message)
+        await cog.decide(i, 1, accept=True)
+        assert "pas le droit" in said(i)
+        i = inter(guild, officer, message=message)
+        await cog.decide(i, 1, accept=True)
+        assert {r.id for r in candidate.roles} == {3, 4}  # rôles donnés, « Nouveau » retiré
+        assert "acceptée" in candidate.send.call_args.args[0] and i.response.edits[0]["view"] is None
+        i = inter(guild, officer, message=message)
+        await cog.decide(i, 1, accept=True)
+        assert "déjà été traitée" in said(i)
+
+        # refus avec raison, puis délai avant de repostuler
+        other = Member(43, guild)
+        guild.get_member = {42: candidate, 7: officer, 43: other}.get
+        await cog.submit(inter(guild, other), [("Ton pseudo NationsGlory", "Bob")])
+        i = inter(guild, officer, message=SimpleNamespace(embeds=[staff_channel.send.call_args.kwargs["embed"]], edit=AsyncMock()))
+        await cog.decide(i, 2, accept=False, reason="Trop jeune")
+        assert "refusée" in other.send.call_args.args[0] and "Trop jeune" in other.send.call_args.args[0]
+        i = inter(guild, other)
+        await cog.start_application(i)
+        assert "repostuler" in said(i)
+
+
+async def test_button_roles(tmp_path):
+    async with ng_bot(tmp_path, "roles") as bot:
+        cog = bot.get_cog("ButtonRoles")
+        guild, roles = make_guild()
+        member = Member(42, guild)
+        assert await bot.save_section(555, "roles", {"roles_1": [3, 4], "roles_3": [1, 2], "unique_3": True}) == []
+        channel = channel_mock(30)
+        i = inter(guild, Member(7, guild, manage=True), channel=channel)
+        await cog.panneau.callback(cog, i, None)
+        view = channel.send.call_args.kwargs["view"]
+        assert [(c.custom_id, c.item.label) for c in view.children] == [("rb:1:3", "Niveau 1"), ("rb:1:4", "Niveau 2")]
+
+        i = inter(guild, member)
+        await cog.toggle(i, "1", 3)
+        assert roles[3] in member.roles and "ajouté" in said(i)
+        await cog.toggle(inter(guild, member), "1", 4)
+        assert roles[3] in member.roles and roles[4] in member.roles  # plusieurs permis
+        i = inter(guild, member)
+        await cog.toggle(i, "1", 3)
+        assert roles[3] not in member.roles and "enlevé" in said(i)
+        i = inter(guild, member)
+        await cog.toggle(i, "1", 5)  # « Staff » est pas offert : refusé
+        assert roles[5] not in member.roles and "plus offert" in said(i)
+
+        await cog.toggle(inter(guild, member), "3", 1)
+        i = inter(guild, member)
+        await cog.toggle(i, "3", 2)  # un seul à la fois : 1 est remplacé par 2
+        assert roles[2] in member.roles and roles[1] not in member.roles and "au lieu de" in said(i)
+
+
+async def test_events(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    async with ng_bot(tmp_path, "evenements") as bot:
+        from plugins.evenements.cog import parse_when, reminders
+        tz = ZoneInfo("America/Toronto")
+        now = datetime(2026, 11, 12, 18, 0, tzinfo=tz)
+        assert parse_when("25/11 20:30", tz, now) == datetime(2026, 11, 25, 20, 30, tzinfo=tz)
+        assert parse_when("25/11/2027 20h", tz, now) == datetime(2027, 11, 25, 20, 0, tzinfo=tz)
+        assert parse_when("demain 21h", tz, now) == datetime(2026, 11, 13, 21, 0, tzinfo=tz)
+        assert parse_when("20h30", tz, now) == datetime(2026, 11, 12, 20, 30, tzinfo=tz)
+        assert parse_when("9h", tz, now) == datetime(2026, 11, 13, 9, 0, tzinfo=tz)  # passé aujourd'hui : demain
+        assert parse_when("05/01 10:00", datetime(2026, 12, 20, tzinfo=tz).tzinfo, datetime(2026, 12, 20, tzinfo=tz)).year == 2027
+        assert parse_when("31/02 10:00", tz, now) is None and parse_when("bientôt", tz, now) is None
+        assert reminders({"rappels": ["10", "60", "x", "0", "99999"]}) == [60, 10, 0]
+
+        cog = bot.get_cog("Events")
+        guild, roles = make_guild()
+        guild.channel_map[90] = channel = channel_mock(90)
+        channel.send = AsyncMock(return_value=SimpleNamespace(id=5000))
+        channel.get_partial_message = lambda mid: SimpleNamespace(edit=AsyncMock())
+        organizer, member = Member(7, guild, roles=[roles[5]]), Member(42, guild)
+        i = inter(guild, organizer, channel=channel)
+        kind = SimpleNamespace(value="guerre", name="⚔️ Guerre")
+        await cog.creer.callback(cog, i, "Assaut", "demain 21h", kind)
+        assert "désactivés" in said(i)
+        assert await bot.save_section(555, "evenements", {"active": True, "salon_id": 90, "role_alerte_id": 4,
+                                                          "role_organisateur_id": 5, "rappels": ["60", "10"]}) == []
+        i = inter(guild, member, channel=channel)
+        await cog.creer.callback(cog, i, "Assaut", "demain 21h", kind)
+        assert "Faut le rôle" in said(i)
+        i = inter(guild, organizer, channel=channel)
+        await cog.creer.callback(cog, i, "Assaut", "demain 21h", kind, "Rendez-vous au bunker")
+        assert "Guerre n°1 planifié" in said(i)
+        post = channel.send.call_args.kwargs
+        assert post["content"] == "<@&4>" and post["embed"].title == "⚔️ Assaut"
+        assert [c.custom_id for c in post["view"].children] == ["evt:oui:1", "evt:peut:1", "evt:non:1"]
+
+        i = inter(guild, member)
+        await cog.answer(i, 1, "oui")
+        fields = {f.name: f.value for f in i.response.edits[0]["embed"].fields}
+        assert fields["✅ Présents (1)"] == "<@42>" and fields["❌ Absents (0)"] == "—"
+        await cog.answer(inter(guild, member), 1, "non")  # change d'idée
+        assert (await cog.answers(1))["oui"] == [] and (await cog.answers(1))["non"] == [42]
+        await cog.answer(inter(guild, organizer), 1, "oui")
+
+        start = (await cog.get(555, 1))["start_ts"]
+        assert await cog.due_reminders(now=start - 3700) == []
+        assert [m for _, m in await cog.due_reminders(now=start - 3500)] == [60]
+        assert await cog.due_reminders(now=start - 3400) == []  # déjà envoyé
+        assert [m for _, m in await cog.due_reminders(now=start + 30)] == [0]  # bot arrêté : juste le plus proche
+        bot.get_guild = {555: guild}.get
+        channel.send.reset_mock()
+        await cog.send_reminder(await cog.get(555, 1), 10)
+        text = channel.send.call_args.args[0]
+        assert text.startswith("<@&4> ⏰ ⚔️ **Assaut** commence") and "Présents : <@7>" in text
+
+        i = inter(guild, member)
+        await cog.annuler.callback(cog, i, 1)
+        assert "pas le droit" in said(i)
+        await cog.annuler.callback(cog, inter(guild, organizer), 1)
+        i = inter(guild, member)
+        await cog.answer(i, 1, "oui")
+        assert "annulé" in said(i)
+
+
+async def test_music(tmp_path, monkeypatch):
+    async with ng_bot(tmp_path, "musique") as bot:
+        from plugins.musique.cog import Track, parse_radios, site_of, title_from_url
+        cog = bot.get_cog("Music")
+        assert site_of("www.youtube.com") == "YouTube" and site_of("open.spotify.com") == "Spotify" and site_of("radio.ca") is None
+        assert title_from_url("https://x.com/dossier/Ma%20chanson.mp3?a=1") == "Ma chanson.mp3"
+        assert parse_radios(["Radio Amour | https://r.example/flux", "brisé", "Rien | ftp://x"]) == {"Radio Amour": "https://r.example/flux"}
+
+        addresses = {"radio.example": ["93.184.216.34"], "interne.example": ["192.168.2.1"]}
+
+        async def resolve(host):
+            return addresses[host]
+
+        monkeypatch.setattr(cog, "resolve", resolve)
+        assert await cog.check_url("https://radio.example/flux.mp3") is None
+        assert "réseau privé" in await cog.check_url("http://interne.example/x.mp3")
+        assert "YouTube est pas supporté" in await cog.check_url("https://youtu.be/abc")
+        assert "http" in await cog.check_url("file:///etc/passwd")
+
+        # Lecteur avec un faux salon vocal : file, enchaînement, passer, départ quand plus personne écoute
+        class Voice:
+            def __init__(self):
+                self.after, self.playing, self.paused, self.connected = None, False, False, True
+                self.channel = SimpleNamespace(members=[Member(42, None)])
+                self.played = []
+
+            def is_connected(self): return self.connected
+            def is_playing(self): return self.playing
+            def is_paused(self): return self.paused
+            def play(self, source, after): self.played.append(source); self.playing, self.after = True, after
+            def stop(self): self.playing = False; self.after(None)
+            async def disconnect(self, force=False): self.connected = False
+
+        monkeypatch.setattr(cog, "make_source", lambda track, volume: f"source:{track.title}@{volume}")
+        await bot.save_section(555, "musique", {"active": True, "volume": 80, "quitter_minutes": 1})
+        player = cog.player(555)
+        player.voice = voice = Voice()
+        assert await cog.enqueue(player, Track("A", "https://radio.example/a.mp3", 42)) == "▶️ Je joue **A**."
+        assert "position 1" in await cog.enqueue(player, Track("B", "https://radio.example/b.mp3", 42))
+        assert voice.played == ["source:A@0.8"] and player.current.title == "A"
+        voice.stop()  # fin de A (ou /passer) : B part tout seul
+        await settle()
+        assert voice.played[-1] == "source:B@0.8" and player.current.title == "B" and not player.queue
+        voice.stop()
+        await settle()
+        assert player.current is None
+        player.idle_since -= 61  # plus de musique depuis 1 minute : il quitte
+        await cog.idle_check.coro(cog)
+        assert not voice.connected and player.voice is None

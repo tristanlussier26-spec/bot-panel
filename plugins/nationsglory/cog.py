@@ -392,6 +392,7 @@ class NGSync(commands.Cog):
 
     async def run_sync(self, guild: discord.Guild, st: GuildNG) -> None:
         members = await st.members(max_age=0)
+        self.bot.dispatch("ng_country_update", guild.id, st.country_name, members)  # ex. le plugin Salons compteurs
         if st.announce_channel_id:
             await self.announce_country_changes(guild, st, members)
         checked, changed, errors = await self.sync_all(guild, st, members)

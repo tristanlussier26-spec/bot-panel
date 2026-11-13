@@ -1,0 +1,101 @@
+{
+  "format": 1,
+  "id": "recrutement",
+  "name": "Recrutement",
+  "version": "1.0.0",
+  "description": "Candidatures au pays avec /postuler ou un bouton : questions à toi, salon du staff avec Accepter/Refuser, rôles donnés tout seuls, réponse en MP.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "enabled_by": "recrutement.active",
+  "intents": [
+    "members"
+  ],
+  "pages": [
+    {
+      "id": "recrutement",
+      "section": "recrutement",
+      "title": "Recrutement",
+      "icon": "📝",
+      "description": "Les candidatures arrivent dans un salon du staff, avec Accepter et Refuser. /recrutement-panneau publie le bouton « Postuler ».",
+      "fields": [
+        {
+          "key": "active",
+          "label": "Recrutement ouvert",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "salon_candidatures_id",
+          "label": "Salon des candidatures (staff)",
+          "type": "channel",
+          "default": 0
+        },
+        {
+          "key": "role_staff_id",
+          "label": "Rôle qui décide",
+          "type": "role",
+          "default": 0,
+          "help": "Il est mentionné à chaque candidature. Aucun = ceux qui ont « Gérer les rôles »."
+        },
+        {
+          "key": "questions",
+          "label": "Questions (une par ligne, 5 au plus)",
+          "type": "lines",
+          "default": [
+            "Ton pseudo NationsGlory",
+            "Ton âge",
+            "Pourquoi veux-tu rejoindre le pays?",
+            "Tes disponibilités"
+          ],
+          "help": "La première est une réponse courte, les autres des paragraphes."
+        },
+        {
+          "key": "roles_acceptes",
+          "label": "Rôles donnés si acceptée",
+          "type": "roles",
+          "default": []
+        },
+        {
+          "key": "role_retire_id",
+          "label": "Rôle retiré si acceptée",
+          "type": "role",
+          "default": 0,
+          "help": "Ex. « Visiteur »."
+        },
+        {
+          "key": "message_accepte",
+          "label": "MP si acceptée",
+          "type": "textarea",
+          "default": "🎉 Ta candidature pour {serveur} est acceptée! Bienvenue parmi nous, {pseudo}!",
+          "help": "Variables : {membre}, {pseudo}, {serveur}"
+        },
+        {
+          "key": "message_refuse",
+          "label": "MP si refusée",
+          "type": "textarea",
+          "default": "Ta candidature pour {serveur} a été refusée."
+        },
+        {
+          "key": "attente_jours",
+          "label": "Jours avant de repostuler après un refus",
+          "type": "int",
+          "default": 7,
+          "min": 0,
+          "max": 365
+        },
+        {
+          "key": "titre_panneau",
+          "label": "Titre du panneau",
+          "type": "text",
+          "default": "📝 Recrutement"
+        },
+        {
+          "key": "message_panneau",
+          "label": "Texte du panneau",
+          "type": "textarea",
+          "default": "Tu veux rejoindre le pays? Clique sur « Postuler » et réponds aux questions. Le staff te répond en MP."
+        }
+      ]
+    }
+  ]
+}

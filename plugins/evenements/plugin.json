@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "id": "evenements",
+  "name": "Événements du pays",
+  "version": "1.0.0",
+  "description": "Planifie guerres, réunions et événements avec /evenement creer : boutons Présent / Peut-être / Absent, rappels automatiques avec mention, heure affichée pour chacun dans son fuseau.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "enabled_by": "evenements.active",
+  "pages": [
+    {"id": "evenements", "section": "evenements", "title": "Événements du pays", "icon": "📅",
+     "description": "/evenement creer, /evenement liste, /evenement annuler. Les dates s'écrivent comme « 25/11 20:30 » ou « demain 21h ».",
+     "fields": [
+       {"key": "active", "label": "Événements activés", "type": "bool", "default": false},
+       {"key": "salon_id", "label": "Salon des événements", "type": "channel", "default": 0, "help": "Aucun = le salon où la commande est faite."},
+       {"key": "role_alerte_id", "label": "Rôle à mentionner", "type": "role", "default": 0, "help": "À l'annonce et aux rappels. Ex. « Alerte guerre »."},
+       {"key": "role_organisateur_id", "label": "Rôle qui peut planifier", "type": "role", "default": 0,
+        "help": "Aucun = ceux qui ont « Gérer les événements » ou « Gérer le serveur »."},
+       {"key": "rappels", "label": "Rappels (minutes avant, un par ligne)", "type": "lines", "default": ["60", "10"],
+        "help": "Un rappel est aussi envoyé au début de l'événement."},
+       {"key": "fuseau", "label": "Fuseau horaire des dates écrites", "type": "select", "default": "America/Toronto",
+        "choices": [["America/Toronto", "Québec / Montréal"], ["Europe/Paris", "France / Belgique / Suisse"], ["UTC", "UTC"]],
+        "help": "Discord affiche ensuite l'heure de chacun dans son propre fuseau."}
+     ]}
+  ]
+}

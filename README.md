@@ -10,7 +10,7 @@ Un panel web pour héberger des bots Discord, un peu comme Pterodactyl, mais fai
 - **Redémarrage automatique** si le bot plante. S'il plante en boucle, le panel arrête d'essayer et te le dit dans la console.
 - **Constructeur de serveurs Discord** : tu décris les rôles, catégories, salons et permissions dans un modèle, tu vois le plan, puis tu l'appliques avec un de tes bots. Tu peux aussi copier un serveur existant ou importer un modèle discord.new.
 - **Modèle « Bot NG »** : un bot Discord pour un pays NationsGlory, prêt à rouler. Tu mets son jeton, et tu choisis ce qu'il fait avec des plugins.
-- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip : synchro des grades NationsGlory, bienvenue, tickets, niveaux, modération, logs, auto-modération, construction du serveur.
+- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip : synchro des grades NationsGlory, bienvenue, tickets, niveaux, modération, logs, auto-modération, construction du serveur, salons compteurs, recrutement, rôles à boutons, événements du pays, musique.
 - **Plusieurs comptes** : connexion avec Discord. L'admin approuve ses amis et fixe leurs limites (nombre de bots, RAM, disque). Chacun voit seulement ses bots.
 
 ## Sécurité : à lire avant d'installer
@@ -289,6 +289,7 @@ Les plugins se parlent par des événements discord.py (`bot.dispatch`), jamais 
 | `botpanel_log(guild_id, embed, categorie)` | `plugin_host.send_log` | Logs |
 | `ng_linked(member)` | Synchro NationsGlory (un `/lier` accepté) | Bienvenue & accès (retire le rôle d'arrivée) |
 | `automod_warn(member, moderateur_id, raison)` | Auto-modération | Modération (garde l'avertissement) |
+| `ng_country_update(guild_id, pays, membres)` | Synchro NationsGlory (après chaque synchro) | Salons compteurs (membres du pays) |
 
 Et ses Cogs peuvent avoir ces méthodes, que le bot appelle :
 

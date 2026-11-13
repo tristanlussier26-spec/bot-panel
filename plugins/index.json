@@ -36,6 +36,28 @@
       "size": 5757
     },
     {
+      "id": "compteurs",
+      "name": "Salons compteurs",
+      "version": "1.0.0",
+      "description": "Des salons vocaux qui se mettent à jour tout seuls : membres, humains, bots, boosts, membres du pays NationsGlory. /compteurs-creer les fait en un clic.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/compteurs-1.0.0.zip",
+      "sha256": "ae6042234d84d79d506d2ade8c2949871cae2aa3dda56056986af159611ed274",
+      "size": 5121
+    },
+    {
+      "id": "evenements",
+      "name": "Événements du pays",
+      "version": "1.0.0",
+      "description": "Planifie guerres, réunions et événements avec /evenement creer : boutons Présent / Peut-être / Absent, rappels automatiques avec mention, heure affichée pour chacun dans son fuseau.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/evenements-1.0.0.zip",
+      "sha256": "fbc0c408339e80e97b0469ae492cde06b8a56c5969ab175c4d4db641261b804a",
+      "size": 8191
+    },
+    {
       "id": "logs",
       "name": "Logs",
       "version": "1.0.0",
@@ -58,15 +80,26 @@
       "size": 6093
     },
     {
+      "id": "musique",
+      "name": "Musique",
+      "version": "1.0.0",
+      "description": "Lecteur dans les salons vocaux : liens audio, radios en ligne (liste à toi), fichiers. File d'attente, pause, passer, volume, rôle DJ, départ automatique. Pas YouTube ni Spotify (leurs conditions l'interdisent).",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/musique-1.0.0.zip",
+      "sha256": "b8a9fa95c6b801f2b20e854797eef90cce1f4e3d3028130bfed1b6754f30aad5",
+      "size": 7839
+    },
+    {
       "id": "nationsglory",
       "name": "Synchro NationsGlory",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/nationsglory-1.1.0.zip",
-      "sha256": "91ab8755f2f1382f7bf4d98a2bed127dff4c36181569fe541a350ac4cd544d4a",
-      "size": 20986
+      "download": "dist/nationsglory-1.2.0.zip",
+      "sha256": "492eb66533e3676b535d57bfc71629b86e1e20f3c7ddba2ab588566cb175244c",
+      "size": 21011
     },
     {
       "id": "niveaux",
@@ -78,6 +111,28 @@
       "download": "dist/niveaux-1.0.0.zip",
       "sha256": "80f63dcef97dbb32773323302b223ac040d50aa04fa793cefaf01e0bb3f68078",
       "size": 6191
+    },
+    {
+      "id": "recrutement",
+      "name": "Recrutement",
+      "version": "1.0.0",
+      "description": "Candidatures au pays avec /postuler ou un bouton : questions à toi, salon du staff avec Accepter/Refuser, rôles donnés tout seuls, réponse en MP.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/recrutement-1.0.0.zip",
+      "sha256": "71413c8848bb1b23adb16f7b63199ce78af5fd5f0be23bfd48c974fcfde012b3",
+      "size": 7608
+    },
+    {
+      "id": "roles",
+      "name": "Rôles à boutons",
+      "version": "1.0.0",
+      "description": "Jusqu'à 3 panneaux où les membres prennent et enlèvent eux-mêmes leurs rôles (alertes, jeux, couleurs…), avec un mode « un seul à la fois ».",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/roles-1.0.0.zip",
+      "sha256": "533eb15297640574339631675bb53376d5346f5436b377a18998ffc618e1e0e5",
+      "size": 4939
     },
     {
       "id": "tickets",

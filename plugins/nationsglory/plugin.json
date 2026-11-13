@@ -2,7 +2,7 @@
   "format": 1,
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",

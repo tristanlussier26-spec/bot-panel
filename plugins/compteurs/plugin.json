@@ -1,0 +1,28 @@
+{
+  "format": 1,
+  "id": "compteurs",
+  "name": "Salons compteurs",
+  "version": "1.0.0",
+  "description": "Des salons vocaux qui se mettent à jour tout seuls : membres, humains, bots, boosts, membres du pays NationsGlory. /compteurs-creer les fait en un clic.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "intents": ["members"],
+  "pages": [
+    {"id": "compteurs", "section": "compteurs", "title": "Salons compteurs", "icon": "📊",
+     "description": "Choisis des salons vocaux : leur nom devient un compteur. {n} = le nombre. Discord permet un renommage aux 5 minutes.",
+     "fields": [
+       {"key": "active", "label": "Compteurs activés", "type": "bool", "default": false},
+       {"key": "salon_membres", "label": "Salon « membres »", "type": "channel", "default": 0},
+       {"key": "format_membres", "label": "Texte", "type": "text", "default": "👥 Membres : {n}"},
+       {"key": "salon_humains", "label": "Salon « humains » (sans les bots)", "type": "channel", "default": 0},
+       {"key": "format_humains", "label": "Texte", "type": "text", "default": "🧑 Humains : {n}"},
+       {"key": "salon_bots", "label": "Salon « bots »", "type": "channel", "default": 0},
+       {"key": "format_bots", "label": "Texte", "type": "text", "default": "🤖 Bots : {n}"},
+       {"key": "salon_boosts", "label": "Salon « boosts »", "type": "channel", "default": 0},
+       {"key": "format_boosts", "label": "Texte", "type": "text", "default": "🚀 Boosts : {n}"},
+       {"key": "salon_pays", "label": "Salon « membres du pays »", "type": "channel", "default": 0,
+        "help": "Avec le plugin Synchro NationsGlory. {pays} = le nom du pays."},
+       {"key": "format_pays", "label": "Texte", "type": "text", "default": "🏳️ {pays} : {n} membres"}
+     ]}
+  ]
+}

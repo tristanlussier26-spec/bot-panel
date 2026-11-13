@@ -12,5 +12,10 @@ Les plugins qu'on installe depuis l'onglet **Plugins** d'un bot (fait avec le mo
 | [`logs`](logs/) | Salon de logs : messages, membres, rôles, vocal, et ce que les autres plugins envoient. | Server Members, Message Content |
 | [`automod`](automod/) | Anti-spam, anti-invitations, anti-liens, mots interdits, mentions en masse, anti-raid. | Server Members, Message Content |
 | [`adminbuild`](adminbuild/) | `/adminbuild` crée les rôles et salons d'un serveur de pays, puis règle les autres plugins. | — |
+| [`compteurs`](compteurs/) | Salons vocaux qui se renomment tout seuls : membres, humains, bots, boosts, membres du pays NG. `/compteurs-creer`. | Server Members |
+| [`recrutement`](recrutement/) | `/postuler` ou bouton « Postuler » : questions à toi, Accepter/Refuser par le staff, rôles donnés, réponse en MP. | Server Members |
+| [`roles`](roles/) | Jusqu'à 3 panneaux de rôles à boutons (alertes, jeux, couleurs), mode « un seul à la fois ». | — |
+| [`evenements`](evenements/) | Guerres, réunions et événements : présences par boutons, rappels automatiques avec mention. | — |
+| [`musique`](musique/) | Lecteur vocal : liens audio, radios en ligne, fichiers ; file, pause, volume, rôle DJ. Pas YouTube ni Spotify. Installe ffmpeg (~200 Mo) au premier démarrage. | — |
 
 Pour écrire un plugin ou en ajouter un ici : voir « Plugins » dans le [README de Bot Panel](../README.md#plugins). Après une modification, monte la `version` dans `plugin.json` et lance `python scripts/build_catalog.py`.

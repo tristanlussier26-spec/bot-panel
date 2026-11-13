@@ -1,0 +1,113 @@
+{
+  "format": 1,
+  "id": "roles",
+  "name": "Rôles à boutons",
+  "version": "1.0.0",
+  "description": "Jusqu'à 3 panneaux où les membres prennent et enlèvent eux-mêmes leurs rôles (alertes, jeux, couleurs…), avec un mode « un seul à la fois ».",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "pages": [
+    {
+      "id": "roles_1",
+      "section": "roles",
+      "title": "Rôles à boutons : panneau 1",
+      "icon": "🎛️",
+      "description": "/roles-panneau panneau:1 publie ce panneau. Le rôle du bot doit être au-dessus des rôles choisis.",
+      "fields": [
+        {
+          "key": "titre_1",
+          "label": "Titre",
+          "type": "text",
+          "default": "🔔 Notifications"
+        },
+        {
+          "key": "message_1",
+          "label": "Texte",
+          "type": "textarea",
+          "default": "Choisis ce que tu veux recevoir comme alertes."
+        },
+        {
+          "key": "roles_1",
+          "label": "Rôles offerts (25 au plus)",
+          "type": "roles",
+          "default": []
+        },
+        {
+          "key": "unique_1",
+          "label": "Un seul rôle à la fois",
+          "type": "bool",
+          "default": false,
+          "help": "Ex. pour des couleurs : prendre un rôle enlève les autres de ce panneau."
+        }
+      ]
+    },
+    {
+      "id": "roles_2",
+      "section": "roles",
+      "title": "Rôles à boutons : panneau 2",
+      "icon": "🎛️",
+      "description": "/roles-panneau panneau:2 publie ce panneau. Le rôle du bot doit être au-dessus des rôles choisis.",
+      "fields": [
+        {
+          "key": "titre_2",
+          "label": "Titre",
+          "type": "text",
+          "default": "🎮 Jeux"
+        },
+        {
+          "key": "message_2",
+          "label": "Texte",
+          "type": "textarea",
+          "default": "Les jeux auxquels tu joues."
+        },
+        {
+          "key": "roles_2",
+          "label": "Rôles offerts (25 au plus)",
+          "type": "roles",
+          "default": []
+        },
+        {
+          "key": "unique_2",
+          "label": "Un seul rôle à la fois",
+          "type": "bool",
+          "default": false,
+          "help": "Ex. pour des couleurs : prendre un rôle enlève les autres de ce panneau."
+        }
+      ]
+    },
+    {
+      "id": "roles_3",
+      "section": "roles",
+      "title": "Rôles à boutons : panneau 3",
+      "icon": "🎛️",
+      "description": "/roles-panneau panneau:3 publie ce panneau. Le rôle du bot doit être au-dessus des rôles choisis.",
+      "fields": [
+        {
+          "key": "titre_3",
+          "label": "Titre",
+          "type": "text",
+          "default": "🎨 Couleurs"
+        },
+        {
+          "key": "message_3",
+          "label": "Texte",
+          "type": "textarea",
+          "default": "Ta couleur de pseudo."
+        },
+        {
+          "key": "roles_3",
+          "label": "Rôles offerts (25 au plus)",
+          "type": "roles",
+          "default": []
+        },
+        {
+          "key": "unique_3",
+          "label": "Un seul rôle à la fois",
+          "type": "bool",
+          "default": true,
+          "help": "Ex. pour des couleurs : prendre un rôle enlève les autres de ce panneau."
+        }
+      ]
+    }
+  ]
+}
