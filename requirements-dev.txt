@@ -2,4 +2,5 @@
 pytest>=8
 pytest-asyncio>=0.24
 pytest-aiohttp>=1.0
-discord.py>=2.4   # seulement pour vérifier la table des permissions
+discord.py>=2.4   # table des permissions + tests des plugins
+aiosqlite>=0.20   # tests du plugin NationsGlory

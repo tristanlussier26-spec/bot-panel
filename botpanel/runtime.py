@@ -46,10 +46,12 @@ def startup_command(bot: dict) -> str:
             "npm install --omit=dev --no-audit --no-fund --loglevel=error || exit 1; fi; "
             f"exec node {main}"
         )
+    # Les dépendances du bot, puis celles de ses plugins (plugins/<id>/requirements.txt)
     return (
-        "if [ -f requirements.txt ]; then echo '[Panel] Installation des dépendances (pip)…'; "
-        "python3 -m pip install --user --disable-pip-version-check --no-warn-script-location -q -r requirements.txt "
-        "|| exit 1; fi; "
+        "for req in requirements.txt plugins/*/requirements.txt; do "
+        "if [ -f \"$req\" ]; then echo \"[Panel] Installation des dépendances (pip) : $req\"; "
+        "python3 -m pip install --user --disable-pip-version-check --no-warn-script-location -q -r \"$req\" "
+        "|| exit 1; fi; done; "
         f"exec python3 -u {main}"
     )
 

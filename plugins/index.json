@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "name": "Catalogue de plugins Bot Panel",
+  "plugins": [
+    {
+      "id": "nationsglory",
+      "name": "Synchro NationsGlory",
+      "version": "1.0.0",
+      "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/nationsglory-1.0.0.zip",
+      "sha256": "12a5a61aacb4f8807232eb3788a57772d915775224fa1ab12d7af843721d91b3",
+      "size": 21527
+    }
+  ]
+}

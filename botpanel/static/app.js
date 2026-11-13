@@ -297,8 +297,8 @@ async function pageNewBot() {
 // ---------------------------------------------------------------------------------------------
 // Page d'un bot
 // ---------------------------------------------------------------------------------------------
-const TABS = [["console", "Console"], ["options", "Options du bot"], ["fichiers", "Fichiers"], ["variables", "Variables"],
-  ["reglages", "Réglages"], ["activite", "Activité"]];
+const TABS = [["console", "Console"], ["options", "Options du bot"], ["plugins", "Plugins"], ["fichiers", "Fichiers"],
+  ["variables", "Variables"], ["reglages", "Réglages"], ["activite", "Activité"]];
 
 async function pageBot(id, tab) {
   let bot = await api("GET", `/api/bots/${id}`);
@@ -333,6 +333,7 @@ async function pageBot(id, tab) {
   const setBot = (fresh) => { bot = { ...bot, ...fresh }; paintHead(); };
   if (tab === "console") tabConsole(bot, body, setBot);
   else if (tab === "options") await tabOptions(bot, body);
+  else if (tab === "plugins") await tabPlugins(bot, body);
   else if (tab === "fichiers") await tabFiles(bot, body);
   else if (tab === "variables") await tabEnv(bot, body);
   else if (tab === "reglages") tabSettings(bot, body, setBot);
@@ -851,6 +852,98 @@ async function tabFiles(bot, body) {
     area.focus();
   }
   await show();
+}
+
+// ---- Plugins -----------------------------------------------------------------------------------
+const PLUGIN_STATES = { loaded: "on", pending: "wait", error: "bad", unknown: "off" };
+
+async function tabPlugins(bot, body, refresh = false) {
+  const data = await api("GET", `/api/bots/${bot.id}/plugins${refresh ? "?refresh=1" : ""}`);
+  const reload = () => tabPlugins(bot, body);
+  const restartToast = (r, what) => toast(r.restart_needed ? `${what}. Redémarre le bot pour l'appliquer.` : what);
+
+  function variablesForm(p) {
+    if (!p.variables.length) return null;
+    const inputs = p.variables.map((v) => {
+      const input = h("input", { type: v.secret ? "password" : "text", id: `pv-${p.id}-${v.key}`, autocomplete: "off", spellcheck: "false",
+        value: v.secret ? "" : v.value, placeholder: v.secret && v.set ? "Valeur gardée (écris pour la changer)" : "" });
+      input.read = () => (v.secret && v.set && !input.value ? null : input.value);
+      return [v, input];
+    });
+    const save = h("button", { class: "btn primary", type: "submit" }, "Enregistrer");
+    const form = h("form", { class: "plugvars" },
+      inputs.map(([v, input]) => h("div", { class: "field" },
+        h("label", { for: input.id }, v.label, v.required && !v.set ? h("span", { class: "plugneed" }, " à remplir") : null),
+        input, v.help ? h("span", { class: "hint" }, v.help) : null)),
+      h("div", { class: "formactions" }, save));
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      act(save, async () => {
+        const values = Object.fromEntries(inputs.map(([v, input]) => [v.key, input.read()]));
+        restartToast(await api("PUT", `/api/bots/${bot.id}/plugins/${p.id}/variables`, { values }), "Variables enregistrées");
+        reload();
+      });
+    });
+    return form;
+  }
+
+  const installed = data.installed.map((p) => h("div", { class: "plug" },
+    h("div", { class: "plug-head" }, lamp(PLUGIN_STATES[p.status] || "off"),
+      h("div", {}, h("div", { class: "slot-name" }, p.name, " ", h("span", { class: "soft" }, p.version)),
+        h("div", { class: "slot-sub" }, p.status_text)),
+      h("div", { class: "plug-actions" },
+        p.update ? h("button", { class: "btn small primary", type: "button", onclick: (e) => act(e.currentTarget, async () => {
+          restartToast(await api("POST", `/api/bots/${bot.id}/plugins/install`, { id: p.id }), `${p.name} mis à jour (${p.update})`);
+          reload();
+        }) }, `Mettre à jour (${p.update})`) : null,
+        h("button", { class: "btn small danger", type: "button", onclick: (e) => {
+          if (!confirm(`Retirer le plugin « ${p.name} » de ${bot.name}? Ses réglages et ses données sont gardés.`)) return;
+          act(e.currentTarget, async () => {
+            restartToast(await api("DELETE", `/api/bots/${bot.id}/plugins/${p.id}`), "Plugin retiré");
+            reload();
+          });
+        } }, "Retirer"))),
+    p.description ? h("p", { class: "soft small plug-desc" }, p.description) : null,
+    variablesForm(p)));
+
+  const have = new Set(data.installed.map((p) => p.id));
+  const catalog = data.catalog.map((c) => h("div", { class: "plug" },
+    h("div", { class: "plug-head" }, h("i", { class: "plug-icon", "aria-hidden": "true" }, "🧩"),
+      h("div", {}, h("div", { class: "slot-name" }, c.name, " ", h("span", { class: "soft" }, c.version)),
+        c.author ? h("div", { class: "slot-sub" }, `par ${c.author}`) : null),
+      h("div", { class: "plug-actions" }, have.has(c.id)
+        ? h("span", { class: "soft small" }, "Installé")
+        : h("button", { class: "btn small primary", type: "button", onclick: (e) => act(e.currentTarget, async () => {
+            restartToast(await api("POST", `/api/bots/${bot.id}/plugins/install`, { id: c.id }), `${c.name} installé`);
+            reload();
+          }) }, "Installer"))),
+    c.description ? h("p", { class: "soft small plug-desc" }, c.description) : null));
+
+  const fileInput = h("input", { type: "file", accept: ".zip,application/zip", id: "plug-zip" });
+  const upload = h("button", { class: "btn", type: "button" }, "Téléverser le plugin");
+  upload.addEventListener("click", () => act(upload, async () => {
+    if (!fileInput.files.length) throw new Error("Choisis le .zip du plugin");
+    const fd = new FormData();
+    fd.append("file", fileInput.files[0]);
+    const r = await api("POST", `/api/bots/${bot.id}/plugins/upload`, fd);
+    restartToast(r, `${r.name} ${r.version} installé`);
+    reload();
+  }));
+
+  fill(body,
+    h("div", { class: "panelbox" }, h("h2", {}, "Plugins installés"),
+      h("p", { class: "soft" }, "Des modules qui ajoutent des fonctions à ton bot. Ils roulent dans le conteneur du bot, et ses réglages apparaissent dans « Options du bot ». Le bot doit supporter les plugins Bot Panel (comme le Bot Amour)."),
+      data.installed.length && !data.host ? h("p", { class: "plugwarn" }, "Ce bot a pas encore dit s'il supporte les plugins. Démarre-le, puis reviens ici.") : null,
+      installed.length ? h("div", { class: "plugs" }, installed) : h("p", { class: "soft" }, "Aucun plugin pour l'instant.")),
+    h("div", { class: "panelbox" },
+      h("div", { class: "plug-title" }, h("h2", {}, "Catalogue"),
+        data.catalog_enabled ? h("button", { class: "btn small", type: "button", onclick: (e) => act(e.currentTarget, () => tabPlugins(bot, body, true)) }, "Rafraîchir") : null),
+      !data.catalog_enabled ? h("p", { class: "soft" }, "Le catalogue est désactivé sur ce panel (PLUGIN_CATALOG).")
+        : data.catalog_error ? h("p", { class: "plugwarn" }, data.catalog_error)
+        : catalog.length ? h("div", { class: "plugs" }, catalog) : h("p", { class: "soft" }, "Le catalogue est vide.")),
+    h("div", { class: "panelbox" }, h("h2", {}, "Téléverser un plugin"),
+      h("p", { class: "soft" }, "Un .zip qui contient plugin.json et __init__.py (voir « Plugins » dans le README de Bot Panel). Installe juste du code que tu connais : il roule avec le jeton de ton bot."),
+      h("div", { class: "formactions" }, h("div", { class: "field" }, fileInput), upload)));
 }
 
 // ---- Variables ---------------------------------------------------------------------------------

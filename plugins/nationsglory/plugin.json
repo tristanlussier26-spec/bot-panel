@@ -1,0 +1,177 @@
+{
+  "format": 1,
+  "id": "nationsglory",
+  "name": "Synchro NationsGlory",
+  "version": "1.0.0",
+  "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "enabled_by": "ng.active",
+  "variables": [
+    {
+      "key": "NG_API_KEY",
+      "label": "Clé de l'API NationsGlory",
+      "secret": true,
+      "required": true,
+      "help": "Commence par ngp_. Demande-la sur nationsglory.fr/developers/keys avec l'IP publique du serveur qui héberge le bot."
+    },
+    {
+      "key": "NG_PROXY",
+      "label": "Proxy à IP fixe (optionnel)",
+      "secret": false,
+      "required": false,
+      "help": "Ex. http://ip-du-vps:3128, si ton IP change souvent. Vide = connexion directe."
+    }
+  ],
+  "pages": [
+    {
+      "id": "ng",
+      "section": "ng",
+      "title": "NationsGlory : synchro",
+      "icon": "🏳️",
+      "description": "Grades du pays ↔ rôles Discord.",
+      "fields": [
+        {
+          "key": "active",
+          "label": "Synchro activée",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "serveur",
+          "label": "Serveur NationsGlory",
+          "type": "text",
+          "default": "jade",
+          "help": "Ex. jade, blue, coral…"
+        },
+        {
+          "key": "pays",
+          "label": "Pays",
+          "type": "text",
+          "default": "",
+          "help": "Le nom (ex. Amour) ou l'adresse de la page du pays. Il est vérifié à l'enregistrement. La clé de l'API est fournie par l'hébergeur du bot : rien à régler."
+        },
+        {
+          "key": "intervalle_minutes",
+          "label": "Synchro aux X minutes",
+          "type": "int",
+          "default": 5,
+          "min": 1,
+          "max": 60
+        },
+        {
+          "key": "grades",
+          "label": "Rôle Discord de chaque grade",
+          "type": "role_map",
+          "keys": [
+            [
+              "LEADER",
+              "Chef"
+            ],
+            [
+              "OFFICER",
+              "Officier"
+            ],
+            [
+              "MEMBER",
+              "Membre"
+            ],
+            [
+              "RECRUIT",
+              "Recrue"
+            ]
+          ]
+        },
+        {
+          "key": "role_pays_id",
+          "label": "Rôle pour tous les membres du pays",
+          "type": "role",
+          "default": 0
+        },
+        {
+          "key": "role_hors_pays_id",
+          "label": "Rôle pour les liés hors du pays",
+          "type": "role",
+          "default": 0,
+          "help": "Ex. Allié / Visiteur."
+        },
+        {
+          "key": "roles_cumulatifs",
+          "label": "Rôles cumulatifs",
+          "type": "bool",
+          "default": false,
+          "help": "Un Officier a aussi Membre et Recrue."
+        },
+        {
+          "key": "renommer",
+          "label": "Surnom = pseudo NG",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "salon_validation_id",
+          "label": "Salon de validation des /lier",
+          "type": "channel",
+          "default": 0,
+          "help": "Les officiers acceptent ou refusent ici. Aucun = liaison directe, pas sécuritaire."
+        },
+        {
+          "key": "role_validateur_id",
+          "label": "Rôle qui peut valider",
+          "type": "role",
+          "default": 0,
+          "help": "Aucun = ceux qui ont la permission « Gérer les rôles »."
+        }
+      ]
+    },
+    {
+      "id": "ng_salons",
+      "section": "ng",
+      "title": "NationsGlory : salons",
+      "icon": "📡",
+      "description": "Salon de stats mis à jour automatiquement et annonces du pays.",
+      "fields": [
+        {
+          "key": "salon_stats_id",
+          "label": "Salon « stats NationsGlory »",
+          "type": "channel",
+          "default": 0,
+          "help": "Membres du pays par grade et fiche du pays."
+        },
+        {
+          "key": "statut_minutes",
+          "label": "Mise à jour aux X minutes",
+          "type": "int",
+          "default": 5,
+          "min": 1,
+          "max": 60
+        },
+        {
+          "key": "salon_annonces_id",
+          "label": "Salon des annonces du pays",
+          "type": "channel",
+          "default": 0,
+          "help": "Ex. #général. Aucun = pas d'annonces."
+        },
+        {
+          "key": "annoncer_arrivees",
+          "label": "Annoncer les nouvelles recrues",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "annoncer_promotions",
+          "label": "Annoncer les promotions",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "annoncer_departs",
+          "label": "Annoncer les départs du pays",
+          "type": "bool",
+          "default": false
+        }
+      ]
+    }
+  ]
+}

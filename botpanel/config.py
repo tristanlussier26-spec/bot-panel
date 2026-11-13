@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+DEFAULT_PLUGIN_CATALOG = "https://raw.githubusercontent.com/tristanlussier26-spec/bot-panel/main/plugins/index.json"
+
+
 def _int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, "") or default)
@@ -39,6 +42,9 @@ class Settings:
     max_upload_mb: int = field(default_factory=lambda: _int("MAX_UPLOAD_MB", 100))
     # Ports que le panel peut ouvrir pour les bots qui ont un site web ou une API (comme les « allocations » de Pterodactyl)
     port_range: str = field(default_factory=lambda: os.getenv("PORT_RANGE", "25500-25599"))
+    # Catalogue des plugins (index.json sur GitHub). Vide = seulement le téléversement de plugins en .zip
+    plugin_catalog: str = field(default_factory=lambda: os.getenv("PLUGIN_CATALOG", DEFAULT_PLUGIN_CATALOG).strip())
+    max_plugin_mb: int = field(default_factory=lambda: _int("MAX_PLUGIN_MB", 5))
 
     @property
     def ports(self) -> range:

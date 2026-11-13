@@ -9,6 +9,7 @@ Un panel web pour héberger des bots Discord, un peu comme Pterodactyl, mais fai
 - **Variables d'environnement** : ton `DISCORD_TOKEN` est caché et jamais réaffiché.
 - **Redémarrage automatique** si le bot plante. S'il plante en boucle, le panel arrête d'essayer et te le dit dans la console.
 - **Constructeur de serveurs Discord** : tu décris les rôles, catégories, salons et permissions dans un modèle, tu vois le plan, puis tu l'appliques avec un de tes bots. Tu peux aussi copier un serveur existant ou importer un modèle discord.new.
+- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip. Le premier : la synchro des grades NationsGlory.
 - **Plusieurs comptes** : connexion avec Discord. L'admin approuve ses amis et fixe leurs limites (nombre de bots, RAM, disque). Chacun voit seulement ses bots.
 
 ## Sécurité : à lire avant d'installer
@@ -213,6 +214,78 @@ Les boutons **Exporter** et **Importer**, sous les pages, copient toutes les opt
 
 Le bot vérifie lui-même ce qu'il reçoit. Le bot amour en est un exemple complet (`utils/panelbridge.py`).
 
+### Plugins
+
+L'onglet **Plugins** d'un bot ajoute des modules à ce bot, un peu comme les plugins d'un serveur Minecraft dans Pterodactyl :
+
+- **Catalogue** : la liste vient de `plugins/index.json` dans ce dépôt GitHub. « Installer » télécharge le .zip, vérifie son sha256, puis le décompresse dans `plugins/<id>/` du bot. « Mettre à jour » apparaît quand le catalogue a une version plus récente.
+- **Téléverser un plugin** : un .zip qui contient `plugin.json` et `__init__.py`. Installe juste du code que tu connais : il roule avec le jeton de ton bot.
+- **Variables** : un plugin peut demander des variables (ex. une clé d'API). Tu les remplis dans sa fiche ; elles sont gardées avec les autres variables du bot, et les secrets sont jamais réaffichés.
+- Redémarre le bot après avoir installé, mis à jour ou retiré un plugin. Les dépendances pip de chaque plugin (`plugins/<id>/requirements.txt`) s'installent au démarrage.
+
+Le code d'un plugin roule seulement dans le conteneur du bot, jamais dans le panel. Le bot doit **supporter les plugins Bot Panel** : c'est lui qui les charge (le bot amour le fait, voir `utils/plugins.py`). Le panel montre si chaque plugin est chargé, d'après le fichier `.botpanel/host.json` que le bot écrit à son démarrage.
+
+Variables du panel : `PLUGIN_CATALOG` (adresse de l'`index.json`, vide = seulement le téléversement) et `MAX_PLUGIN_MB` (5 par défaut).
+
+#### Écrire un plugin
+
+Un plugin, c'est un dossier `plugins/<id>/` :
+
+| Fichier | Contenu |
+|---|---|
+| `plugin.json` | la description du plugin (voir plus bas) |
+| `__init__.py` | une extension discord.py : `async def setup(bot)` |
+| `requirements.txt` | facultatif : des paquets PyPI, une ligne chacun (pas d'URL ni d'option pip) |
+
+```json
+{
+  "format": 1,
+  "id": "salut",
+  "name": "Salut",
+  "version": "1.0.0",
+  "description": "Dit bonjour aux nouveaux.",
+  "author": "toi",
+  "runtime": "discord.py",
+  "enabled_by": "salut.active",
+  "variables": [{"key": "SALUT_CLE", "label": "Clé d'API", "secret": true, "required": true, "help": "…"}],
+  "pages": [{"id": "salut", "section": "salut", "title": "Salut", "icon": "👋", "description": "…",
+             "fields": [{"key": "active", "label": "Activé", "type": "bool", "default": false}]}]
+}
+```
+
+- `id` : lettres minuscules, chiffres et `_` (c'est aussi le nom du module Python `plugins.<id>`).
+- `pages` : ses pages dans « Options du bot », avec les mêmes types de champs que plus haut (`role_map` avec `keys`, `select` avec `choices`). Chaque page a une `section` : les valeurs y sont gardées par serveur Discord. Un plugin peut pas prendre une section du bot.
+- `enabled_by` : le réglage qui fait apparaître ses commandes slash sur un serveur (ex. `salut.active`).
+- `variables` : les variables d'environnement qu'il lit avec `os.getenv`.
+
+Dans `setup(bot)`, le plugin utilise `bot.plugin_host` :
+
+| `bot.plugin_host.…` | Ce que ça fait |
+|---|---|
+| `config(guild_id, section)` | les réglages d'un serveur (ceux de ses pages) |
+| `data_dir(plugin_id)` | un dossier à lui, gardé quand le plugin est mis à jour ou retiré |
+| `send_log(guild_id, embed, categorie)` | un message dans le salon de logs du serveur |
+| `refresh_panel()` | redemande au bot d'envoyer son état au panel |
+
+Et ses Cogs peuvent avoir ces méthodes, que le bot appelle :
+
+| Méthode | Quand |
+|---|---|
+| `validate_guild_config(config) -> list[str]` | avant d'enregistrer des réglages : les erreurs bloquent |
+| `async before_panel_save(guild, section, values)` | avant d'enregistrer depuis le panel : nettoyer `values`, ou lever `ValueError` pour refuser |
+| `panel_info(guild_id) -> [(titre, texte)]` | lignes affichées à côté du serveur dans « Options du bot » |
+| `async on_guild_config_update(guild_id)` | les réglages de ce serveur ont changé |
+
+Une exception avec un attribut `user_message` est montrée telle quelle au membre qui a fait la commande.
+
+#### Ajouter un plugin au catalogue
+
+1. Mets ton plugin dans `plugins/<id>/` de ce dépôt, avec ses tests dans `tests/`.
+2. Lance `python scripts/build_catalog.py` : ça crée `plugins/dist/<id>-<version>.zip` et met `plugins/index.json` à jour (les zips sont reproductibles).
+3. Ouvre une pull request. Les tests vérifient que le catalogue est à jour.
+
+Pour sortir une nouvelle version, monte `version` dans `plugin.json` et refais l'étape 2.
+
 ## Mettre le panel sur Internet
 
 Passe par ton proxy (HAProxy, Nginx Proxy Manager…) avec un certificat HTTPS. Le proxy doit laisser passer les WebSocket, sinon la console marchera pas.
@@ -230,6 +303,8 @@ Avec HTTPS, les cookies sont marqués « Secure » tout seuls.
 | « Ton compte est en attente » | L'admin approuve le compte dans l'onglet Admin. Ton ID doit être dans `ADMIN_IDS` pour être admin. |
 | Le bot démarre pas, erreur de dossier | Le panel trouve pas son dossier data sur la machine. Mets `HOST_DATA_DIR=/opt/bot-panel/data` dans `.env`. |
 | `pip`/`npm` échoue au démarrage | Regarde la console : souvent une faute dans `requirements.txt` ou pas assez de RAM (monte-la dans Réglages). |
+| Plugin « pas encore dit s'il supporte les plugins » | Le bot a pas écrit `.botpanel/host.json` : démarre-le. S'il le fait jamais, ce bot supporte pas les plugins Bot Panel. |
+| Plugin en erreur | La raison est sur sa fiche (onglet Plugins) et dans la console du bot. |
 | Le constructeur dit « le bot a pas la permission » | Donne le rôle Administrateur au bot, et mets son rôle tout en haut de la liste des rôles. |
 
 ## Développement

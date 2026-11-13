@@ -405,6 +405,21 @@ details.help pre { font-variation-settings: var(--mono); font-size: 0.84rem; bac
 .login .btn.primary { background: #fff; color: var(--ink); border-color: #fff; }
 .login .btn.primary:hover { background: #E4E0FA; }
 
+/* ---- Plugins ---- */
+.plugs { border: 1px solid var(--line); border-radius: var(--r-ctl); background: #fff; }
+.plug { padding: 0.9rem 1rem; border-top: 1px solid var(--line); }
+.plug:first-child { border-top: 0; }
+.plug-head { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 1rem; align-items: center; }
+.plug-icon { font-style: normal; font-size: 1.1rem; line-height: 1; }
+.plug .slot-name { white-space: normal; overflow: visible; }
+.plug-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.plug-desc { margin: 0.5rem 0 0 calc(22px + 1rem); }
+.plugvars { margin: 0.9rem 0 0 calc(22px + 1rem); padding-top: 0.9rem; border-top: 1px dashed var(--line); }
+.plugneed { color: var(--bad); font-weight: 560; font-size: 0.85rem; }
+.plugwarn { padding: 0.7rem 0.9rem; border-radius: var(--r-ctl); background: #FBF0D9; color: #6B4B10; margin-bottom: 1rem; }
+.plug-title { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.9rem; }
+.plug-title h2 { margin: 0; }
+
 /* ---- Petits écrans ---- */
 @media (max-width: 900px) {
   .consolegrid, .buildgrid, .optgrid { grid-template-columns: 1fr; }
@@ -425,6 +440,9 @@ details.help pre { font-variation-settings: var(--mono); font-size: 0.84rem; bac
   .bothead { grid-template-columns: 1fr; }
   .power { justify-content: flex-start; }
   .envrow { grid-template-columns: 1fr 1fr; }
+  .plug-head { grid-template-columns: 18px minmax(0, 1fr); }
+  .plug-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .plug-desc, .plugvars { margin-left: 0; }
   .filelist .hide-sm { display: none; }
   .feed li { grid-template-columns: 1fr; gap: 0; }
   .users-wrap { overflow-x: auto; }

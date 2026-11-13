@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from botpanel import __version__, builder, gitops, options
+from botpanel import __version__, builder, gitops, options, plugins
 from botpanel.auth import Auth, avatar_url
 from botpanel.config import Settings
 from botpanel.db import Database
@@ -40,6 +40,7 @@ class Panel:
         self.settings = settings or Settings()
         self.db = Database(self.settings.data_dir / "panel.db")
         self.runtime = BotRuntime(self.settings)
+        self.catalog = plugins.Catalog(self.settings.plugin_catalog, max_bytes=self.settings.max_plugin_mb * 1024 * 1024)
         self.auth = Auth(self)
         self.busy: set[str] = set()  # bots en train de démarrer/s'arrêter (la surveillance y touche pas)
         self._stats: dict[str, tuple[float, dict | None]] = {}
@@ -78,6 +79,11 @@ class Panel:
         r.add_get("/api/bots/{bot}/env", self.get_env)
         r.add_put("/api/bots/{bot}/env", self.put_env)
         r.add_post("/api/bots/{bot}/git", self.git_pull)
+        r.add_get("/api/bots/{bot}/plugins", self.plugins_list)
+        r.add_post("/api/bots/{bot}/plugins/install", self.plugins_install)
+        r.add_post("/api/bots/{bot}/plugins/upload", self.plugins_upload)
+        r.add_put("/api/bots/{bot}/plugins/{pid}/variables", self.plugins_variables)
+        r.add_delete("/api/bots/{bot}/plugins/{pid}", self.plugins_remove)
         # Fichiers
         r.add_get("/api/bots/{bot}/files", self.files_list)
         r.add_get("/api/bots/{bot}/files/content", self.files_read)
@@ -141,7 +147,7 @@ class Panel:
             return await handler(request)
         except ApiError as e:
             return web.json_response({"error": str(e)}, status=e.status)
-        except (FileError, gitops.FileError, builder.TemplateError, RuntimeError_, options.OptionsError) as e:
+        except (FileError, gitops.FileError, builder.TemplateError, RuntimeError_, options.OptionsError, plugins.PluginError) as e:
             return web.json_response({"error": str(e)}, status=400)
         except builder.DiscordError as e:
             return web.json_response({"error": str(e)}, status=400 if e.status != 401 else 400)
@@ -676,6 +682,136 @@ class Panel:
         await self.db.log(request[USER]["id"], "Variables modifiées", bot_id=bot["id"], detail=", ".join(k for k, _, _ in clean))
         status = await self.runtime.status(bot["id"]) if self.docker_ok else {"state": "offline"}
         return web.json_response({"ok": True, "restart_needed": status["state"] == "running"})
+
+    # ---- Plugins --------------------------------------------------------------------------------
+    @staticmethod
+    def _plugin_status(plugin: dict, host: dict | None) -> tuple[str, str]:
+        """(état, explication) d'un plugin installé, d'après ce que le bot a dit à son dernier démarrage."""
+        if plugin.get("error"):
+            return "error", plugin["error"]
+        if host is None:
+            return "unknown", "Le bot a pas encore dit s'il supporte les plugins Bot Panel : démarre-le."
+        info = host["plugins"].get(plugin["id"])
+        if info is None or (info["loaded"] and info["version"] != plugin["version"]):
+            return "pending", "Redémarre le bot pour charger cette version."
+        if info["error"]:
+            return "error", info["error"]
+        return "loaded", "Chargé par le bot."
+
+    async def _running(self, bot: dict) -> bool:
+        return self.docker_ok and (await self.runtime.status(bot["id"]))["state"] == "running"
+
+    async def plugins_list(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)
+        files = self.files(bot["id"])
+        installed = await asyncio.to_thread(plugins.installed, files, reserved_env=RESERVED_ENV)
+        host = await asyncio.to_thread(plugins.host_report, files)
+        env = {e["key"]: e for e in await self.db.get_env(bot["id"])}
+        catalog, catalog_error = [], None
+        try:
+            catalog = await self.catalog.entries(force=request.query.get("refresh") == "1")
+        except plugins.PluginError as e:
+            catalog_error = str(e)
+        latest = {c["id"]: c["version"] for c in catalog}
+        for p in installed:
+            p.pop("pages", None)
+            p["status"], p["status_text"] = self._plugin_status(p, host)
+            p["variables"] = [
+                {**v, "set": bool(env.get(v["key"], {}).get("value")),
+                 "value": None if v["secret"] else env.get(v["key"], {}).get("value", "")}
+                for v in p["variables"]
+            ]
+            newer = latest.get(p["id"])
+            p["update"] = newer if newer and p["version"] != "?" and plugins.version_key(newer) > plugins.version_key(p["version"]) else None
+        return web.json_response({
+            "installed": installed,
+            "catalog": [{k: c[k] for k in ("id", "name", "version", "description", "author")} for c in catalog],
+            "catalog_enabled": bool(self.catalog.url),
+            "catalog_error": catalog_error,
+            "host": host is not None,
+            "running": await self._running(bot),
+        })
+
+    async def _install_plugin(self, request: web.Request, bot: dict, blob: bytes, source: str) -> web.Response:
+        max_bytes = self.settings.max_plugin_mb * 1024 * 1024
+        manifest, contents = await asyncio.to_thread(plugins.read_zip, blob, max_bytes=max_bytes, reserved_env=RESERVED_ENV)
+        if sum(len(v) for v in contents.values()) > await self.disk_left(bot):
+            raise ApiError("Plus assez d'espace disque pour ce plugin")
+        files = self.files(bot["id"])
+        before = {p["id"]: p["version"] for p in await asyncio.to_thread(plugins.installed, files)}
+        await asyncio.to_thread(plugins.install, files, manifest, contents)
+        self._disk.pop(bot["id"], None)
+        what = f"{manifest['name']} {manifest['version']}"
+        verb = "mis à jour" if manifest["id"] in before else "installé"
+        self.runtime.console.publish(bot["id"], f"Plugin {verb} : {what} ({source})")
+        await self.db.log(request[USER]["id"], f"Plugin {verb}", bot_id=bot["id"], detail=f"{what} ({source})")
+        return web.json_response({"ok": True, "id": manifest["id"], "name": manifest["name"], "version": manifest["version"],
+                                  "restart_needed": await self._running(bot)})
+
+    async def plugins_install(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)
+        entry = await self.catalog.find(str((await self.body(request)).get("id", "")))
+        blob = await self.catalog.download(entry)
+        return await self._install_plugin(request, bot, blob, "catalogue")
+
+    async def plugins_upload(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)
+        limit = self.settings.max_plugin_mb * 1024 * 1024
+        reader = await request.multipart()
+        blob = None
+        while (part := await reader.next()) is not None:
+            if part.name != "file":
+                continue
+            chunks, size = [], 0
+            while chunk := await part.read_chunk(256 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise ApiError(f"Plugin trop gros ({self.settings.max_plugin_mb} Mo max)")
+                chunks.append(chunk)
+            blob = b"".join(chunks)
+        if not blob:
+            raise ApiError("Choisis le .zip du plugin")
+        return await self._install_plugin(request, bot, blob, "zip téléversé")
+
+    async def plugins_variables(self, request: web.Request) -> web.Response:
+        """Les variables d'un plugin (ex. sa clé d'API), gardées avec les autres variables du bot."""
+        bot = await self.bot_for(request)
+        plugin = next((p for p in await asyncio.to_thread(plugins.installed, self.files(bot["id"]), reserved_env=RESERVED_ENV)
+                       if p["id"] == request.match_info["pid"] and not p["error"]), None)
+        if plugin is None:
+            raise ApiError("Plugin introuvable", 404)
+        values = (await self.body(request)).get("values")
+        if not isinstance(values, dict):
+            raise ApiError("Requête invalide")
+        declared = {v["key"]: v for v in plugin["variables"]}
+        current = [(e["key"], e["value"], bool(e["secret"])) for e in await self.db.get_env(bot["id"])]
+        changed = []
+        for key, value in values.items():
+            if key not in declared or value is None:  # None : secret pas retouché
+                continue
+            value = str(value).strip()
+            if len(value) > 4096 or "\x00" in value:
+                raise ApiError(f"Valeur de {key} trop longue")
+            current = [item for item in current if item[0] != key]
+            if value:
+                current.append((key, value, declared[key]["secret"]))
+            changed.append(key)
+        if len(current) > 100:
+            raise ApiError("Trop de variables (100 max)")
+        await self.db.set_env(bot["id"], current)
+        if changed:
+            await self.db.log(request[USER]["id"], "Variables de plugin modifiées", bot_id=bot["id"],
+                              detail=f"{plugin['name']} : {', '.join(changed)}")
+        return web.json_response({"ok": True, "restart_needed": bool(changed) and await self._running(bot)})
+
+    async def plugins_remove(self, request: web.Request) -> web.Response:
+        bot = await self.bot_for(request)
+        pid = request.match_info["pid"]
+        await asyncio.to_thread(plugins.remove, self.files(bot["id"]), pid)
+        self._disk.pop(bot["id"], None)
+        self.runtime.console.publish(bot["id"], f"Plugin retiré : {pid}")
+        await self.db.log(request[USER]["id"], "Plugin retiré", bot_id=bot["id"], detail=pid)
+        return web.json_response({"ok": True, "restart_needed": await self._running(bot)})
 
     # ---- Git ------------------------------------------------------------------------------------
     async def git_pull(self, request: web.Request) -> web.Response:
