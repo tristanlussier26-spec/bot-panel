@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "adminbuild",
+  "name": "Construction du serveur",
+  "version": "1.0.0",
+  "description": "/adminbuild crée les rôles, catégories et salons d'un serveur de pays NationsGlory, puis règle les autres plugins tout seul.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "pages": []
+}

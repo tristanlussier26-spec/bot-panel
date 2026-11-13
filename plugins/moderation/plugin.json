@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "id": "moderation",
+  "name": "Modération",
+  "version": "1.0.0",
+  "description": "/warn, /timeout, /kick, /ban, /clear, /slowmode… avec avertissements gardés et MP au membre sanctionné.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "pages": [
+    {
+      "id": "moderation",
+      "section": "moderation",
+      "title": "Modération",
+      "icon": "🔨",
+      "description": "Commandes /warn, /timeout, /ban, etc.",
+      "fields": [
+        {
+          "key": "mp_sanctions",
+          "label": "MP au membre sanctionné",
+          "type": "bool",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

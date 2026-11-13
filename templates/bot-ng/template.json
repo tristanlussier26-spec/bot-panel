@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "id": "bot-ng",
+  "name": "Bot NG",
+  "version": "1.0.0",
+  "description": "Un bot Discord pour un pays NationsGlory. Tu ajoutes ce qu'il fait avec des plugins : synchro des grades, bienvenue, tickets, niveaux, modération, logs, auto-modération, construction du serveur.",
+  "language": "python",
+  "main_file": "bot.py",
+  "plugins": ["nationsglory"]
+}

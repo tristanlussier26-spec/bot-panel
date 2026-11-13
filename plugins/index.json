@@ -3,15 +3,92 @@
   "name": "Catalogue de plugins Bot Panel",
   "plugins": [
     {
+      "id": "adminbuild",
+      "name": "Construction du serveur",
+      "version": "1.0.0",
+      "description": "/adminbuild crée les rôles, catégories et salons d'un serveur de pays NationsGlory, puis règle les autres plugins tout seul.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/adminbuild-1.0.0.zip",
+      "sha256": "cd0077ab05aed238f6f55aacde5d0f6027e9cc8237f7510c22f0d35809ba4e92",
+      "size": 9714
+    },
+    {
+      "id": "automod",
+      "name": "Auto-modération",
+      "version": "1.0.0",
+      "description": "Anti-spam, anti-invitations, anti-liens, mots interdits, mentions en masse, alerte anti-raid.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/automod-1.0.0.zip",
+      "sha256": "18d8021e2655e06ec8369e41a81277ea4af905310eaf6bb3512f02e491dda1c6",
+      "size": 5405
+    },
+    {
+      "id": "bienvenue",
+      "name": "Bienvenue & accès",
+      "version": "1.0.0",
+      "description": "Messages de bienvenue et de départ, MP de bienvenue, rôle d'arrivée à accès restreint retiré par un bouton « J'accepte » ou par la liaison NationsGlory.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/bienvenue-1.0.0.zip",
+      "sha256": "260b8a071350ccca1231372745fe41fd427a3a3227042f7e01dc493b3c48ce30",
+      "size": 5757
+    },
+    {
+      "id": "logs",
+      "name": "Logs",
+      "version": "1.0.0",
+      "description": "Salon de logs : messages supprimés ou modifiés, arrivées et départs, rôles, vocal, et ce que les autres plugins y envoient (sanctions, tickets, liaisons).",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/logs-1.0.0.zip",
+      "sha256": "afe8d3778564b327f84c4d1b15ba90c15bbccf2f5380201eb80ebc26e5bee0b1",
+      "size": 5985
+    },
+    {
+      "id": "moderation",
+      "name": "Modération",
+      "version": "1.0.0",
+      "description": "/warn, /timeout, /kick, /ban, /clear, /slowmode… avec avertissements gardés et MP au membre sanctionné.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/moderation-1.0.0.zip",
+      "sha256": "faf236d02aebc5c2376b510621f80e7c8c743ca53ef0da56d01218ebaf1e4100",
+      "size": 6093
+    },
+    {
       "id": "nationsglory",
       "name": "Synchro NationsGlory",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/nationsglory-1.0.0.zip",
-      "sha256": "12a5a61aacb4f8807232eb3788a57772d915775224fa1ab12d7af843721d91b3",
-      "size": 21527
+      "download": "dist/nationsglory-1.1.0.zip",
+      "sha256": "91ab8755f2f1382f7bf4d98a2bed127dff4c36181569fe541a350ac4cd544d4a",
+      "size": 20986
+    },
+    {
+      "id": "niveaux",
+      "name": "Niveaux",
+      "version": "1.0.0",
+      "description": "XP en écrivant, annonce des niveaux, rôles en récompense, /rang et /classement.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/niveaux-1.0.0.zip",
+      "sha256": "80f63dcef97dbb32773323302b223ac040d50aa04fa793cefaf01e0bb3f68078",
+      "size": 6191
+    },
+    {
+      "id": "tickets",
+      "name": "Tickets",
+      "version": "1.0.0",
+      "description": "Panneau avec un bouton pour ouvrir un ticket : salon privé avec le staff, fermeture avec transcription dans les logs.",
+      "author": "tristanlussier26-spec",
+      "runtime": "discord.py",
+      "download": "dist/tickets-1.0.0.zip",
+      "sha256": "45ce5110e7617e90e7dc41bd8a2712f2480722aa8729633e434f8d08ce543f45",
+      "size": 6302
     }
   ]
 }

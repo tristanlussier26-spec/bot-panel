@@ -1,0 +1,84 @@
+{
+  "format": 1,
+  "id": "niveaux",
+  "name": "Niveaux",
+  "version": "1.0.0",
+  "description": "XP en écrivant, annonce des niveaux, rôles en récompense, /rang et /classement.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "enabled_by": "niveaux.active",
+  "pages": [
+    {
+      "id": "niveaux",
+      "section": "niveaux",
+      "title": "Niveaux",
+      "icon": "⭐",
+      "description": "XP en écrivant, annonces de niveau et récompenses.",
+      "fields": [
+        {
+          "key": "active",
+          "label": "Niveaux activés",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "salon_annonce_id",
+          "label": "Salon des annonces de niveau",
+          "type": "channel",
+          "default": 0,
+          "help": "Ex. #général. Aucun = dans le salon où le membre écrit."
+        },
+        {
+          "key": "message",
+          "label": "Message de niveau",
+          "type": "textarea",
+          "default": "🎉 Bravo {membre}, tu passes au **niveau {niveau}**!",
+          "help": "Variables : {membre}, {pseudo}, {niveau}"
+        },
+        {
+          "key": "xp_min",
+          "label": "XP minimum par message",
+          "type": "int",
+          "default": 15,
+          "min": 1,
+          "max": 500
+        },
+        {
+          "key": "xp_max",
+          "label": "XP maximum par message",
+          "type": "int",
+          "default": 25,
+          "min": 1,
+          "max": 500
+        },
+        {
+          "key": "cooldown_secondes",
+          "label": "Délai entre deux gains d'XP (secondes)",
+          "type": "int",
+          "default": 60,
+          "min": 0,
+          "max": 3600
+        },
+        {
+          "key": "salons_ignores",
+          "label": "Salons sans XP",
+          "type": "channels",
+          "default": []
+        },
+        {
+          "key": "recompenses",
+          "label": "Rôles en récompense",
+          "type": "level_roles",
+          "default": {},
+          "help": "Rôle donné en atteignant un niveau."
+        },
+        {
+          "key": "cumuler_recompenses",
+          "label": "Garder les anciennes récompenses",
+          "type": "bool",
+          "default": true
+        }
+      ]
+    }
+  ]
+}

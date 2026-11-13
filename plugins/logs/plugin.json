@@ -1,0 +1,72 @@
+{
+  "format": 1,
+  "id": "logs",
+  "name": "Logs",
+  "version": "1.0.0",
+  "description": "Salon de logs : messages supprimés ou modifiés, arrivées et départs, rôles, vocal, et ce que les autres plugins y envoient (sanctions, tickets, liaisons).",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "intents": [
+    "members",
+    "message_content"
+  ],
+  "pages": [
+    {
+      "id": "logs",
+      "section": "logs",
+      "title": "Logs",
+      "icon": "📜",
+      "description": "Tout ce qui se passe sur le serveur, dans un salon privé.",
+      "fields": [
+        {
+          "key": "salon_id",
+          "label": "Salon des logs",
+          "type": "channel",
+          "default": 0
+        },
+        {
+          "key": "messages",
+          "label": "Messages supprimés / modifiés",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "membres",
+          "label": "Arrivées, départs, noms, liaisons NG",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "vocal",
+          "label": "Vocal",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "roles",
+          "label": "Rôles et surnoms",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "salons",
+          "label": "Salons et rôles créés/supprimés",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "moderation",
+          "label": "Modération et auto-modération",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "salons_ignores",
+          "label": "Salons à ne pas logger",
+          "type": "channels",
+          "default": []
+        }
+      ]
+    }
+  ]
+}

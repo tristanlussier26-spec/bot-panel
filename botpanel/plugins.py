@@ -2,7 +2,7 @@
 
 Un plugin vient du catalogue (un index.json, sur GitHub par défaut) ou d'un .zip téléversé.
 Le panel le décompresse dans plugins/<id>/ du bot ; c'est le bot qui le charge à son démarrage
-(il doit supporter les plugins Bot Panel, comme le Bot Amour : voir README, « Plugins »).
+(il doit supporter les plugins Bot Panel, comme le modèle Bot NG : voir README, « Plugins »).
 Le code d'un plugin roule seulement dans le conteneur du bot, jamais dans le panel.
 
 Format d'un plugin (format 1) :
@@ -32,6 +32,7 @@ ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")  # aussi un nom de module Python v
 VERSION_RE = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,4}([-+][0-9A-Za-z.]{1,20})?$")
 VAR_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+INTENTS = {"members": "Server Members Intent", "message_content": "Message Content Intent", "presences": "Presence Intent"}
 # Une ligne de requirements.txt : un paquet de PyPI et des versions, rien d'autre (pas d'URL ni d'option pip)
 REQ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}(\[[A-Za-z0-9._,-]{1,80}\])?\s*((==|>=|<=|~=|!=|<|>)\s*[A-Za-z0-9.*+!_-]{1,40}\s*,?\s*){0,4}$")
 EXTENSIONS = {".py", ".json", ".txt", ".md", ".toml", ".yml", ".yaml", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ttf", ".otf"}
@@ -84,6 +85,9 @@ def validate_manifest(raw: object, *, reserved_env: set[str] = frozenset()) -> d
     pages = raw.get("pages") or []
     if not isinstance(pages, list) or len(pages) > 20 or not all(isinstance(p, dict) and isinstance(p.get("fields"), list) for p in pages):
         raise PluginError("plugin.json : « pages » invalide")
+    intents = raw.get("intents") or []
+    if not isinstance(intents, list) or not set(intents) <= set(INTENTS):
+        raise PluginError(f"plugin.json : « intents » invalide (permis : {', '.join(INTENTS)})")
     enabled_by = raw.get("enabled_by") or ""
     if enabled_by and not re.match(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$", str(enabled_by)):
         raise PluginError("plugin.json : enabled_by doit ressembler à « section.cle »")
@@ -91,6 +95,7 @@ def validate_manifest(raw: object, *, reserved_env: set[str] = frozenset()) -> d
         "format": FORMAT, "id": plugin_id, "name": _text(raw, "name", 60), "version": version,
         "description": _text(raw, "description", 500, required=False), "author": _text(raw, "author", 60, required=False),
         "runtime": runtime, "variables": variables, "pages": pages, "enabled_by": enabled_by,
+        "intents": sorted(set(intents)),
     }
 
 

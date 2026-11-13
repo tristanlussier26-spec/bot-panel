@@ -89,6 +89,9 @@ class Database:
             await self.conn.execute("ALTER TABLE bots ADD COLUMN port INTEGER")
         if "shared" not in cols:
             await self.conn.execute("ALTER TABLE bots ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
+        if "kit" not in cols:  # modèle de bot (templates/) et sa version installée
+            await self.conn.execute("ALTER TABLE bots ADD COLUMN kit TEXT NOT NULL DEFAULT ''")
+            await self.conn.execute("ALTER TABLE bots ADD COLUMN kit_version TEXT NOT NULL DEFAULT ''")
         await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bots_port ON bots (port)")
         await self.conn.commit()
 
@@ -194,6 +197,9 @@ class Database:
             sets = ", ".join(f"{k} = ?" for k in values)
             await self._run(f"UPDATE bots SET {sets} WHERE id = ?", (*values.values(), bot_id))
         return await self.get_bot(bot_id)
+
+    async def set_kit(self, bot_id: str, kit: str, version: str) -> None:
+        await self._run("UPDATE bots SET kit = ?, kit_version = ? WHERE id = ?", (kit, version, bot_id))
 
     async def delete_bot(self, bot_id: str) -> None:
         await self._run("DELETE FROM bots WHERE id = ?", (bot_id,))

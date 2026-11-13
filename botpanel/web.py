@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
-from botpanel import __version__, builder, gitops, options, plugins
+from botpanel import __version__, builder, gitops, kits, options, plugins
 from botpanel.auth import Auth, avatar_url
 from botpanel.config import Settings
 from botpanel.db import Database
@@ -65,6 +65,8 @@ class Panel:
         r.add_get("/api/me", self.api_me)
         # Bots
         r.add_get("/api/bots", self.list_bots)
+        r.add_get("/api/kits", self.list_kits)
+        r.add_post("/api/bots/{bot}/kit", self.update_kit)
         r.add_post("/api/bots", self.create_bot)
         r.add_get("/api/bots/{bot}", self.get_bot)
         r.add_patch("/api/bots/{bot}", self.update_bot)
@@ -147,7 +149,8 @@ class Panel:
             return await handler(request)
         except ApiError as e:
             return web.json_response({"error": str(e)}, status=e.status)
-        except (FileError, gitops.FileError, builder.TemplateError, RuntimeError_, options.OptionsError, plugins.PluginError) as e:
+        except (FileError, gitops.FileError, builder.TemplateError, RuntimeError_, options.OptionsError, plugins.PluginError,
+                kits.KitError) as e:
             return web.json_response({"error": str(e)}, status=400)
         except builder.DiscordError as e:
             return web.json_response({"error": str(e)}, status=400 if e.status != 401 else 400)
@@ -301,7 +304,7 @@ class Panel:
                     has_git_token=bool(bot["git_token"]), owner_id=str(bot["owner_id"]), status=status,
                     has_options=options.has_schema(self.files(bot["id"])), shared=bool(bot.get("shared")),
                     stats=await self.stats(bot["id"]) if status["state"] == "running" else None,
-                    disk_mb=round(await self.disk_bytes(bot["id"]) / 1024 / 1024, 1))
+                    disk_mb=round(await self.disk_bytes(bot["id"]) / 1024 / 1024, 1), kit=self._kit_info(bot))
         if details:
             owner = await self.db.get_user(bot["owner_id"])
             data["owner"] = {"id": str(bot["owner_id"]), "name": owner["name"] if owner else "?"}
@@ -400,9 +403,18 @@ class Panel:
         if total > user["max_ram_mb"]:
             raise ApiError(f"RAM : {total} Mo au total dépasserait ta limite de {user['max_ram_mb']} Mo")
 
+    async def list_kits(self, request: web.Request) -> web.Response:
+        return web.json_response(await asyncio.to_thread(kits.list_kits, self.settings.kits_dir))
+
     async def create_bot(self, request: web.Request) -> web.Response:
         user = request[USER]
         data = await self.body(request)
+        kit = None
+        if data.get("kit"):  # modèle de bot : son langage et son fichier principal
+            kit = await asyncio.to_thread(kits.get_kit, self.settings.kits_dir, str(data["kit"]))
+            data.update(language=kit["language"], main_file=kit["main_file"], starter=False, startup_cmd="")
+            if not str(data.get("image") or "").startswith(kit["language"]):
+                data["image"] = ""
         fields = self._clean_settings(data, user)
         await self._check_limits(user, ram_mb=fields["ram_mb"], creating=True)
         if fields.pop("web_port", False):
@@ -410,16 +422,64 @@ class Panel:
         bot = await self.db.create_bot(user["id"], **fields)
         files = self.files(bot["id"])
         files.ensure()
-        if data.get("starter", True) and bot["language"] in ("python", "node"):
+        notes = []
+        if kit is not None:
+            await asyncio.to_thread(kits.install, files, self.settings.kits_dir, kit["id"])
+            await self.db.set_kit(bot["id"], kit["id"], kit["version"])
+            notes = await self._install_kit_plugins(user, bot, kit)
+            bot = await self.db.get_bot(bot["id"])
+        elif data.get("starter", True) and bot["language"] in ("python", "node"):
             self._starter(files, bot)
-        await self.db.log(user["id"], "Bot créé", bot_id=bot["id"], detail=bot["name"])
+        await self.db.log(user["id"], "Bot créé", bot_id=bot["id"],
+                          detail=bot["name"] + (f" (modèle {kit['name']} {kit['version']})" if kit else ""))
         if bot["git_url"]:
             try:
                 await gitops.deploy(files, bot["git_url"], bot["git_branch"], bot["git_token"])
                 await self.db.log(user["id"], "Dépôt Git cloné", bot_id=bot["id"], detail=bot["git_url"])
             except FileError as e:
                 self.runtime.console.publish(bot["id"], f"Clonage du dépôt raté : {e}")
-        return web.json_response(await self.bot_public(bot, details=True), status=201)
+        return web.json_response({**await self.bot_public(bot, details=True), "notes": notes}, status=201)
+
+    async def _install_kit_plugins(self, user: dict, bot: dict, kit: dict) -> list[str]:
+        """Les plugins du modèle, depuis le catalogue. Un plugin qui s'installe pas empêche pas la création du bot."""
+        notes = []
+        files = self.files(bot["id"])
+        for pid in kit["plugins"]:
+            try:
+                entry = await self.catalog.find(pid)
+                manifest, contents = await asyncio.to_thread(
+                    plugins.read_zip, await self.catalog.download(entry),
+                    max_bytes=self.settings.max_plugin_mb * 1024 * 1024, reserved_env=RESERVED_ENV)
+                await asyncio.to_thread(plugins.install, files, manifest, contents)
+                await self.db.log(user["id"], "Plugin installé", bot_id=bot["id"],
+                                  detail=f"{manifest['name']} {manifest['version']} (modèle)")
+            except (plugins.PluginError, FileError) as e:
+                notes.append(f"Plugin « {pid} » pas installé : {e}. Installe-le dans l'onglet Plugins.")
+        return notes
+
+    async def update_kit(self, request: web.Request) -> web.Response:
+        """Recopie les fichiers du modèle (nouvelle version). Plugins, données, variables et .env restent."""
+        bot = await self.bot_for(request)
+        if not bot.get("kit"):
+            raise ApiError("Ce bot a pas été créé à partir d'un modèle")
+        kit = await asyncio.to_thread(kits.get_kit, self.settings.kits_dir, bot["kit"])
+        count = await asyncio.to_thread(kits.install, self.files(bot["id"]), self.settings.kits_dir, kit["id"])
+        await self.db.set_kit(bot["id"], kit["id"], kit["version"])
+        self._disk.pop(bot["id"], None)
+        self.runtime.console.publish(bot["id"], f"Modèle {kit['name']} mis à jour : version {kit['version']} ({count} fichiers)")
+        await self.db.log(request[USER]["id"], "Modèle mis à jour", bot_id=bot["id"], detail=f"{kit['name']} {kit['version']}")
+        return web.json_response({**await self.bot_public(await self.db.get_bot(bot["id"]), details=True),
+                                  "restart_needed": await self._running(bot)})
+
+    def _kit_info(self, bot: dict) -> dict | None:
+        if not bot.get("kit"):
+            return None
+        try:
+            latest = kits.get_kit(self.settings.kits_dir, bot["kit"])
+        except kits.KitError:
+            return {"id": bot["kit"], "name": bot["kit"], "version": bot.get("kit_version") or "", "update": None}
+        newer = latest["version"] if latest["version"] and latest["version"] != bot.get("kit_version") else None
+        return {"id": bot["kit"], "name": latest["name"], "version": bot.get("kit_version") or "", "update": newer}
 
     @staticmethod
     def _starter(files: BotFiles, bot: dict) -> None:
@@ -716,6 +776,7 @@ class Panel:
         for p in installed:
             p.pop("pages", None)
             p["status"], p["status_text"] = self._plugin_status(p, host)
+            p["intents"] = [plugins.INTENTS[i] for i in p.get("intents", [])]
             p["variables"] = [
                 {**v, "set": bool(env.get(v["key"], {}).get("value")),
                  "value": None if v["secret"] else env.get(v["key"], {}).get("value", "")}

@@ -31,7 +31,7 @@ def test_manifest():
     from botpanel.plugins import validate_manifest
 
     manifest = validate_manifest(json.loads((PLUGIN / "plugin.json").read_text(encoding="utf-8")))
-    assert manifest["id"] == "nationsglory" and manifest["enabled_by"] == "ng.active"
+    assert manifest["id"] == "nationsglory" and manifest["enabled_by"] == "ng.active" and manifest["intents"] == ["members"]
     assert [v["key"] for v in manifest["variables"]] == ["NG_API_KEY", "NG_PROXY"]
     assert {p["section"] for p in manifest["pages"]} == {"ng"}
 
@@ -208,25 +208,17 @@ async def test_rate_limiter_shared():
 
 
 # ---------------------------------------------------------------- stockage
-async def test_store_and_legacy_import(tmp_path):
+async def test_store(tmp_path):
     store = Store(tmp_path / "ng.db")
     await store.connect()
-    await store.add_link(555, 1, "Deja_La")
-
-    class Legacy:
-        async def all_links(self, gid):
-            return [{"discord_id": 42, "ng_name": "Tristan_QC", "linked_at": 1700000000},
-                    {"discord_id": 1, "ng_name": "Autre"}] if gid == 555 else []
-
-        async def values_with_prefix(self, prefix):
-            return {"stats_message:9": "123"} if prefix == "stats_message:" else {}
-
-    assert await store.import_legacy(Legacy(), [555, 777]) == 1
+    await store.add_link(555, 42, "Tristan_QC", 1700000000)
     assert (await store.get_link(555, 42))["linked_at"] == 1700000000
-    assert (await store.get_link(555, 1))["ng_name"] == "Deja_La"  # rien d'écrasé
-    assert await store.get_value("stats_message:9") == "123"
-    assert await store.import_legacy(Legacy(), [555]) == 0  # une seule fois
-    assert await store.import_legacy(None, [555]) == 0
+    assert (await store.get_link_by_name(555, "tristan_qc"))["discord_id"] == 42  # sans tenir compte de la casse
+    await store.rename_link(555, 42, "TRISTAN_QC")
+    assert [r["ng_name"] for r in await store.all_links(555)] == ["TRISTAN_QC"] and await store.all_links(777) == []
+    assert await store.remove_link(555, 42) and not await store.remove_link(555, 42)
+    await store.set_value("k", "v")
+    assert await store.get_value("k") == "v"
     await store.close()
 
 

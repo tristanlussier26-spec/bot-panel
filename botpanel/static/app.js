@@ -194,7 +194,7 @@ async function pageBots() {
 // ---------------------------------------------------------------------------------------------
 // Nouveau bot / réglages
 // ---------------------------------------------------------------------------------------------
-function settingsForm(bot, onSubmit, submitLabel) {
+function settingsForm(bot, onSubmit, submitLabel, kits = []) {
   const isNew = !bot;
   bot = bot || { language: "python", ram_mb: 256, cpu_percent: 100, auto_restart: true, main_file: "", image: "" };
   const form = h("form", { class: "panelbox" });
@@ -221,7 +221,30 @@ function settingsForm(bot, onSubmit, submitLabel) {
     Object.entries(LANGS).map(([value, label]) => h("label", {},
       h("input", { type: "radio", name: "language", value, checked: bot.language === value, onchange: () => fillImages(value) }), label)));
 
+  // Modèle de bot (nouveau bot seulement) : il fixe le langage et le fichier principal
+  const kitSelect = h("select", { name: "kit", id: "f-kit" },
+    kits.map((k) => h("option", { value: k.id }, `${k.name} (${k.version})`)),
+    h("option", { value: "" }, "Aucun : mes propres fichiers"));
+  const kitHint = h("span", { class: "hint" });
+  function applyKit() {
+    const kit = kits.find((k) => k.id === kitSelect.value);
+    form.querySelectorAll("input[name=language]").forEach((r) => {
+      r.disabled = !!kit;
+      if (kit) r.checked = r.value === kit.language;
+    });
+    mainInput.disabled = !!kit;
+    if (kit) { mainInput.value = kit.main_file; fillImages(kit.language); }
+    // Le modèle décide du langage, du fichier principal et de la commande : on cache ces champs
+    langs.closest(".field").hidden = !!kit;
+    mainInput.closest(".field").hidden = !!kit;
+    cmdField.hidden = !!kit;
+    fill(kitHint, kit ? [kit.description, kit.plugins.length ? ` Plugins installés d'office : ${kit.plugins.join(", ")}.` : ""] :
+      "Tu mets tes propres fichiers (ou un petit bot d'exemple est créé).");
+  }
+  kitSelect.addEventListener("change", applyKit);
+
   form.append(
+    isNew && kits.length ? h("div", { class: "field" }, h("label", { for: "f-kit" }, "Modèle de bot"), kitSelect, kitHint) : null,
     h("div", { class: "field" }, h("label", { for: "f-name" }, "Nom du bot"),
       h("input", { type: "text", id: "f-name", name: "name", value: bot.name || "", maxlength: 40, required: true, placeholder: "ex. Bot musique" })),
     h("div", { class: "field" }, h("label", {}, "Langage"), langs,
@@ -277,21 +300,27 @@ function settingsForm(bot, onSubmit, submitLabel) {
       auto_restart: fd.get("auto_restart") === "on", web_port: fd.get("web_port") === "on", shared: fd.get("shared") === "on",
     };
     if (isNew && fd.get("git_url")) Object.assign(data, { git_url: fd.get("git_url"), git_branch: fd.get("git_branch"), git_token: fd.get("git_token") || null });
+    if (isNew && kits.length && kitSelect.value) {
+      const kit = kits.find((k) => k.id === kitSelect.value);
+      Object.assign(data, { kit: kit.id, language: kit.language, main_file: kit.main_file, startup_cmd: "" });
+    }
     act(submit, () => onSubmit(data));
   });
-  queueMicrotask(() => fillImages(bot.language));
+  queueMicrotask(() => { fillImages(bot.language); if (isNew && kits.length) applyKit(); });
   return form;
 }
 
 async function pageNewBot() {
+  const kits = await api("GET", "/api/kits");
   mount(h("a", { class: "back", href: "#/" }, "Retour aux bots"),
     h("div", { class: "pagehead" }, h("div", {}, h("h1", {}, "Nouveau bot"),
       h("p", { class: "soft" }, "Tu pourras changer tout ça plus tard dans les réglages du bot."))),
     settingsForm(null, async (data) => {
       const bot = await api("POST", "/api/bots", data);
-      toast("Bot créé. Ajoute son jeton dans Variables, puis démarre-le.");
+      (bot.notes || []).forEach((n) => console.warn(n));
+      toast(bot.notes && bot.notes.length ? bot.notes[0] : "Bot créé. Ajoute son jeton dans Variables, puis démarre-le.", !!(bot.notes && bot.notes.length));
       location.hash = `#/bot/${bot.id}/variables`;
-    }, "Créer le bot"));
+    }, "Créer le bot", kits));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -904,6 +933,8 @@ async function tabPlugins(bot, body, refresh = false) {
           });
         } }, "Retirer"))),
     p.description ? h("p", { class: "soft small plug-desc" }, p.description) : null,
+    p.intents && p.intents.length ? h("p", { class: "small plug-desc" }, "À activer dans le Developer Portal (Bot › Privileged Gateway Intents) : ",
+      h("strong", {}, p.intents.join(", "))) : null,
     variablesForm(p)));
 
   const have = new Set(data.installed.map((p) => p.id));
@@ -932,7 +963,7 @@ async function tabPlugins(bot, body, refresh = false) {
 
   fill(body,
     h("div", { class: "panelbox" }, h("h2", {}, "Plugins installés"),
-      h("p", { class: "soft" }, "Des modules qui ajoutent des fonctions à ton bot. Ils roulent dans le conteneur du bot, et ses réglages apparaissent dans « Options du bot ». Le bot doit supporter les plugins Bot Panel (comme le Bot Amour)."),
+      h("p", { class: "soft" }, "Des modules qui ajoutent des fonctions à ton bot. Ils roulent dans le conteneur du bot, et ses réglages apparaissent dans « Options du bot ». Le bot doit supporter les plugins Bot Panel (comme ceux créés avec le modèle « Bot NG »)."),
       data.installed.length && !data.host ? h("p", { class: "plugwarn" }, "Ce bot a pas encore dit s'il supporte les plugins. Démarre-le, puis reviens ici.") : null,
       installed.length ? h("div", { class: "plugs" }, installed) : h("p", { class: "soft" }, "Aucun plugin pour l'instant.")),
     h("div", { class: "panelbox" },
@@ -985,6 +1016,15 @@ function tabSettings(bot, body, setBot) {
     toast(bot.status.state === "running" ? "Réglages enregistrés. Redémarre le bot pour les appliquer." : "Réglages enregistrés");
   }, "Enregistrer les réglages");
   general.prepend(h("h2", {}, "Réglages"), h("p", { class: "soft" }, "Les changements s'appliquent au prochain démarrage du bot."));
+  const kitBox = bot.kit ? h("div", { class: "panelbox" }, h("h2", {}, `Modèle : ${bot.kit.name}`),
+    h("p", { class: "soft" }, `Version des fichiers du modèle : ${bot.kit.version || "?"}.`,
+      bot.kit.update ? ` La version ${bot.kit.update} est disponible : ça recopie les fichiers du modèle. Tes plugins, leurs réglages, les données et les variables restent.` : " C'est la dernière version."),
+    bot.kit.update ? h("div", { class: "formactions" }, h("button", { class: "btn primary", type: "button", onclick: (e) => act(e.currentTarget, async () => {
+      const r = await api("POST", `/api/bots/${bot.id}/kit`);
+      Object.assign(bot, r); setBot(r);
+      toast(r.restart_needed ? `Modèle mis à jour (${r.kit.version}). Redémarre le bot.` : `Modèle mis à jour (${r.kit.version})`);
+      tabSettings(bot, body, setBot);
+    }) }, `Mettre à jour (${bot.kit.update})`)) : null) : null;
 
   const gitForm = h("form", { class: "panelbox" },
     h("h2", {}, "Déploiement GitHub"),
@@ -1017,7 +1057,7 @@ function tabSettings(bot, body, setBot) {
   const danger = h("div", { class: "panelbox danger" }, h("h2", {}, "Supprimer le bot"),
     h("p", { class: "soft" }, "Arrête le bot et efface son conteneur, ses fichiers et ses variables. Ça se défait pas."),
     h("div", { class: "field" }, h("label", { for: "del-confirm" }, `Écris « ${bot.name} » pour confirmer`), confirmInput), del);
-  fill(body, general, gitForm, danger);
+  fill(body, general, kitBox, gitForm, danger);
 }
 
 // ---- Activité ----------------------------------------------------------------------------------

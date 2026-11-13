@@ -436,12 +436,6 @@ class NGSync(commands.Cog):
     @tick.before_loop
     async def _before_tick(self) -> None:
         await self.bot.wait_until_ready()
-        try:  # comptes liés avec l'ancienne synchro NG intégrée au Bot Amour : repris une seule fois
-            count = await self.store.import_legacy(getattr(self.bot, "db", None), [g.id for g in self.bot.guilds])
-            if count:
-                log.info("%d compte(s) lié(s) repris de l'ancienne synchro NG", count)
-        except Exception:  # noqa: BLE001
-            log.exception("Reprise des comptes liés")
 
     async def _link(self, member: discord.Member, name: str, st: GuildNG, *, by: discord.abc.User | None = None) -> str:
         """Enregistre la liaison, synchronise et retourne un résumé."""
@@ -449,8 +443,7 @@ class NGSync(commands.Cog):
         await self.store.add_link(guild_id, member.id, name)
         await self._log_link(guild_id, member, name, linked=True, by=by)
         log.info("%s : %s lié à %s%s", member.guild.name, member, name, f" (validé par {by})" if by else "")
-        if (welcome := self.bot.get_cog("Welcome")) is not None:
-            await welcome.on_ng_linked(member)  # retire le rôle d'arrivée restreint, si configuré
+        self.bot.dispatch("ng_linked", member)  # ex. le plugin Bienvenue retire le rôle d'arrivée
         link = await self.store.get_link(guild_id, member.id)
         try:
             plan, entry = await self.sync_member(member, link, st)

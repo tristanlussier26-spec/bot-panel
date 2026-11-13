@@ -1,0 +1,73 @@
+{
+  "format": 1,
+  "id": "tickets",
+  "name": "Tickets",
+  "version": "1.0.0",
+  "description": "Panneau avec un bouton pour ouvrir un ticket : salon privé avec le staff, fermeture avec transcription dans les logs.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "enabled_by": "tickets.active",
+  "intents": [
+    "members"
+  ],
+  "pages": [
+    {
+      "id": "tickets",
+      "section": "tickets",
+      "title": "Tickets",
+      "icon": "🎫",
+      "description": "Les membres ouvrent un salon privé avec le staff.",
+      "fields": [
+        {
+          "key": "active",
+          "label": "Tickets activés",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "categorie_id",
+          "label": "Catégorie des tickets",
+          "type": "category",
+          "default": 0,
+          "help": "Les salons de tickets sont créés ici."
+        },
+        {
+          "key": "role_staff_id",
+          "label": "Rôle du staff",
+          "type": "role",
+          "default": 0,
+          "help": "Voit et gère tous les tickets."
+        },
+        {
+          "key": "salon_transcripts_id",
+          "label": "Salon des transcriptions",
+          "type": "channel",
+          "default": 0,
+          "help": "Une copie de chaque ticket fermé y est envoyée."
+        },
+        {
+          "key": "message_panneau",
+          "label": "Texte du panneau",
+          "type": "textarea",
+          "default": "Besoin d'aide, une plainte ou une candidature? Clique sur le bouton pour ouvrir un ticket.",
+          "help": "Publie le panneau avec /ticket-panneau."
+        },
+        {
+          "key": "message_ouverture",
+          "label": "Message dans le ticket",
+          "type": "textarea",
+          "default": "Salut {membre}! Explique ta demande, le staff va te répondre bientôt.",
+          "help": "Variables : {membre} (mention), {pseudo}, {serveur}, {nombre} (nombre de membres)"
+        },
+        {
+          "key": "max_par_membre",
+          "label": "Tickets ouverts max par membre",
+          "type": "int",
+          "default": 1,
+          "min": 1,
+          "max": 5
+        }
+      ]
+    }
+  ]
+}

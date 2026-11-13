@@ -20,8 +20,6 @@ CREATE TABLE IF NOT EXISTS kv (
     value TEXT NOT NULL
 );
 """
-IMPORTED = "_import_bot_hote"
-LEGACY_PREFIXES = ("stats_message:", "ng_rangs:")
 
 
 class Store:
@@ -86,22 +84,3 @@ class Store:
     async def remove_link(self, guild_id: int, discord_id: int) -> bool:
         cur = await self._run("DELETE FROM ng_links WHERE guild_id = ? AND discord_id = ?", (guild_id, discord_id))
         return cur.rowcount > 0
-
-    # ---- Reprise des données d'avant le plugin (synchro NG intégrée au Bot Amour) ----------------
-    async def import_legacy(self, legacy, guild_ids: list[int]) -> int:
-        """Copie une seule fois les comptes liés gardés par le bot hôte. Retourne le nombre de comptes repris."""
-        if await self.get_value(IMPORTED) or not hasattr(legacy, "all_links"):
-            return 0
-        count = 0
-        for guild_id in guild_ids:
-            for row in await legacy.all_links(guild_id):
-                if await self.get_link(guild_id, row["discord_id"]) is None and not await self.get_link_by_name(guild_id, row["ng_name"]):
-                    await self.add_link(guild_id, row["discord_id"], row["ng_name"], row.get("linked_at"))
-                    count += 1
-        if hasattr(legacy, "values_with_prefix"):
-            for prefix in LEGACY_PREFIXES:
-                for key, value in (await legacy.values_with_prefix(prefix)).items():
-                    if await self.get_value(key) is None:
-                        await self.set_value(key, value)
-        await self.set_value(IMPORTED, str(int(time.time())))
-        return count

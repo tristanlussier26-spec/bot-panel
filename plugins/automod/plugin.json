@@ -1,0 +1,157 @@
+{
+  "format": 1,
+  "id": "automod",
+  "name": "Auto-modération",
+  "version": "1.0.0",
+  "description": "Anti-spam, anti-invitations, anti-liens, mots interdits, mentions en masse, alerte anti-raid.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "intents": [
+    "members",
+    "message_content"
+  ],
+  "pages": [
+    {
+      "id": "automod",
+      "section": "automod",
+      "title": "Auto-modération",
+      "icon": "🛡️",
+      "description": "Le bot supprime et sanctionne automatiquement.",
+      "fields": [
+        {
+          "key": "active",
+          "label": "Auto-modération activée",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "anti_spam",
+          "label": "Anti-spam",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "spam_messages",
+          "label": "Spam : nombre de messages",
+          "type": "int",
+          "default": 5,
+          "help": "C'est du spam si le membre envoie autant de messages…",
+          "min": 2,
+          "max": 30
+        },
+        {
+          "key": "spam_secondes",
+          "label": "Spam : en moins de (secondes)",
+          "type": "int",
+          "default": 5,
+          "help": "…en moins de secondes que ça.",
+          "min": 1,
+          "max": 60
+        },
+        {
+          "key": "anti_invitations",
+          "label": "Bloquer les invitations Discord",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "anti_liens",
+          "label": "Bloquer les liens",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "liens_autorises",
+          "label": "Sites autorisés (un par ligne)",
+          "type": "lines",
+          "default": [
+            "nationsglory.fr",
+            "youtube.com",
+            "youtu.be",
+            "tenor.com"
+          ]
+        },
+        {
+          "key": "mots_interdits",
+          "label": "Mots interdits (un par ligne)",
+          "type": "lines",
+          "default": []
+        },
+        {
+          "key": "max_mentions",
+          "label": "Mentions max par message",
+          "type": "int",
+          "default": 6,
+          "help": "0 = pas de limite.",
+          "min": 0,
+          "max": 50
+        },
+        {
+          "key": "sanction",
+          "label": "Sanction",
+          "type": "select",
+          "default": "supprimer",
+          "choices": [
+            [
+              "supprimer",
+              "Supprimer le message seulement"
+            ],
+            [
+              "avertir",
+              "Supprimer + avertissement (/warns)"
+            ],
+            [
+              "sourdine",
+              "Supprimer + sourdine"
+            ]
+          ]
+        },
+        {
+          "key": "duree_sourdine",
+          "label": "Durée de la sourdine (minutes)",
+          "type": "int",
+          "default": 10,
+          "min": 1,
+          "max": 40320
+        },
+        {
+          "key": "anti_raid",
+          "label": "Alerte anti-raid",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "raid_arrivees",
+          "label": "Raid : nombre d'arrivées",
+          "type": "int",
+          "default": 8,
+          "help": "Alerte dans les logs si autant de monde arrive…",
+          "min": 3,
+          "max": 100
+        },
+        {
+          "key": "raid_secondes",
+          "label": "Raid : en moins de (secondes)",
+          "type": "int",
+          "default": 30,
+          "help": "…en moins de secondes que ça.",
+          "min": 5,
+          "max": 600
+        },
+        {
+          "key": "roles_exemptes",
+          "label": "Rôles exemptés",
+          "type": "roles",
+          "default": [],
+          "help": "Le staff avec « Gérer les messages » est toujours exempté."
+        },
+        {
+          "key": "salons_exemptes",
+          "label": "Salons exemptés",
+          "type": "channels",
+          "default": []
+        }
+      ]
+    }
+  ]
+}

@@ -45,6 +45,8 @@ class Settings:
     # Catalogue des plugins (index.json sur GitHub). Vide = seulement le téléversement de plugins en .zip
     plugin_catalog: str = field(default_factory=lambda: os.getenv("PLUGIN_CATALOG", DEFAULT_PLUGIN_CATALOG).strip())
     max_plugin_mb: int = field(default_factory=lambda: _int("MAX_PLUGIN_MB", 5))
+    # Modèles de bots (« Nouveau bot ») : un dossier par modèle, avec template.json
+    kits_dir: Path = field(default_factory=lambda: Path(os.getenv("TEMPLATES_DIR", "") or Path(__file__).resolve().parents[1] / "templates"))
 
     @property
     def ports(self) -> range:

@@ -224,3 +224,63 @@ def test_catalog_is_up_to_date():
     root = Path(__file__).resolve().parents[1]
     r = subprocess.run([sys.executable, "scripts/build_catalog.py", "--check"], cwd=root, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+async def test_bot_from_kit_and_kit_update(env, catalog, tmp_path):  # noqa: F811
+    panel, client, _ = env
+    # Un modèle à nous (le vrai Bot NG est testé plus bas) : 1 plugin du catalogue, 1 qui y est pas
+    kit = tmp_path / "modeles" / "mon-kit"
+    (kit / "lib").mkdir(parents=True)
+    (kit / "main.py").write_text("print('v1')\n")
+    (kit / "lib" / "outil.py").write_text("x = 1\n")
+    (kit / ".env").write_text("SECRET=pas-copie\n")
+    (kit / "template.json").write_text(json.dumps({"format": 1, "id": "mon-kit", "name": "Mon kit", "version": "1.0.0",
+                                                   "language": "python", "main_file": "main.py", "plugins": ["salut", "absent"]}))
+    (tmp_path / "modeles" / "brise").mkdir()
+    (tmp_path / "modeles" / "brise" / "template.json").write_text("{")
+    panel.settings.kits_dir = tmp_path / "modeles"
+    admin = await client(ADMIN)
+
+    kits_list = await (await admin.get("/api/kits")).json()
+    assert [k["id"] for k in kits_list] == ["mon-kit"] and kits_list[0]["plugins"] == ["salut", "absent"]
+
+    r = await admin.post("/api/bots", json={"name": "Mon NG", "language": "node", "main_file": "x.js", "kit": "mon-kit"}, headers=H)
+    assert r.status == 201, await r.text()
+    bot = await r.json()
+    assert (bot["language"], bot["main_file"]) == ("python", "main.py")  # imposés par le modèle
+    assert bot["kit"] == {"id": "mon-kit", "name": "Mon kit", "version": "1.0.0", "update": None}
+    assert bot["notes"] == ["Plugin « absent » pas installé : Ce plugin est pas dans le catalogue. Installe-le dans l'onglet Plugins."]
+    files = panel.files(bot["id"])
+    assert files.read_text("main.py") == "print('v1')\n" and files.read_text("lib/outil.py") == "x = 1\n"
+    assert not files.path(".env").exists() and not files.path("template.json").exists()
+    assert files.path("plugins/salut/__init__.py").is_file()  # plugin du modèle installé depuis le catalogue
+    assert (await admin.post("/api/bots", json={"name": "X", "kit": "inconnu"}, headers=H)).status == 400
+
+    # Nouvelle version du modèle : « Mettre à jour » recopie ses fichiers, sans toucher aux plugins ni aux données
+    files.write_text("data/bot.db", "base")
+    files.write_text("lib/outil.py", "modifié à la main")
+    (kit / "main.py").write_text("print('v2')\n")
+    (kit / "template.json").write_text(json.dumps({"format": 1, "id": "mon-kit", "name": "Mon kit", "version": "1.1.0",
+                                                   "language": "python", "main_file": "main.py"}))
+    bot = await (await admin.get(f"/api/bots/{bot['id']}")).json()
+    assert bot["kit"]["update"] == "1.1.0"
+    r = await admin.post(f"/api/bots/{bot['id']}/kit", headers=H)
+    assert r.status == 200
+    assert (await r.json())["kit"] == {"id": "mon-kit", "name": "Mon kit", "version": "1.1.0", "update": None}
+    assert files.read_text("main.py") == "print('v2')\n" and files.read_text("lib/outil.py") == "x = 1\n"
+    assert files.read_text("data/bot.db") == "base" and files.path("plugins/salut/plugin.json").is_file()
+
+    plain = await (await admin.post("/api/bots", json={"name": "Simple", "language": "python"}, headers=H)).json()
+    assert plain["kit"] is None
+    assert (await admin.post(f"/api/bots/{plain['id']}/kit", headers=H)).status == 400
+
+
+def test_real_bot_ng_kit():
+    from botpanel import kits
+    from botpanel.config import Settings
+    found = {k["id"]: k for k in kits.list_kits(Settings().kits_dir)}
+    ng = found["bot-ng"]
+    assert (ng["language"], ng["main_file"], ng["plugins"]) == ("python", "bot.py", ["nationsglory"])
+    files = kits.kit_files(Settings().kits_dir, "bot-ng")
+    assert {"bot.py", "requirements.txt", "botng/bot.py", "botng/plugins.py", "botng/panelbridge.py"} <= set(files)
+    assert not any(name.endswith(".pyc") or name.startswith(("data/", "plugins/")) for name in files)

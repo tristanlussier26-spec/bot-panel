@@ -9,7 +9,8 @@ Un panel web pour héberger des bots Discord, un peu comme Pterodactyl, mais fai
 - **Variables d'environnement** : ton `DISCORD_TOKEN` est caché et jamais réaffiché.
 - **Redémarrage automatique** si le bot plante. S'il plante en boucle, le panel arrête d'essayer et te le dit dans la console.
 - **Constructeur de serveurs Discord** : tu décris les rôles, catégories, salons et permissions dans un modèle, tu vois le plan, puis tu l'appliques avec un de tes bots. Tu peux aussi copier un serveur existant ou importer un modèle discord.new.
-- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip. Le premier : la synchro des grades NationsGlory.
+- **Modèle « Bot NG »** : un bot Discord pour un pays NationsGlory, prêt à rouler. Tu mets son jeton, et tu choisis ce qu'il fait avec des plugins.
+- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip : synchro des grades NationsGlory, bienvenue, tickets, niveaux, modération, logs, auto-modération, construction du serveur.
 - **Plusieurs comptes** : connexion avec Discord. L'admin approuve ses amis et fixe leurs limites (nombre de bots, RAM, disque). Chacun voit seulement ses bots.
 
 ## Sécurité : à lire avant d'installer
@@ -212,7 +213,17 @@ Dans `state.json`, chaque serveur a la forme `{"id", "name", "channels": [{"id",
 
 Les boutons **Exporter** et **Importer**, sous les pages, copient toutes les options d'un serveur dans un fichier `.json`. Tu peux ensuite les remettre sur un autre serveur ou les restaurer plus tard. À l'import, les salons et les rôles sont retrouvés par leur nom. Ceux qui existent pas sur le serveur sont laissés vides, et le panel les nomme.
 
-Le bot vérifie lui-même ce qu'il reçoit. Le bot amour en est un exemple complet (`utils/panelbridge.py`).
+Le bot vérifie lui-même ce qu'il reçoit. Le modèle Bot NG en est un exemple complet (`templates/bot-ng/botng/panelbridge.py`).
+
+### Modèles de bots
+
+Dans **Nouveau bot**, choisis un **modèle** : le panel copie un bot prêt à rouler, avec ses plugins de départ. Tu mets son jeton (`DISCORD_TOKEN`) dans Variables, et tu le démarres.
+
+**Bot NG** : un bot Discord pour un pays NationsGlory. Sans plugin, il fait juste le minimum (`/aide`, `/ping`, `/serveur`…) ; tu choisis le reste dans l'onglet Plugins. Il installe d'office la synchro NationsGlory. Un seul Bot NG peut servir plusieurs pays : coche « Bot partagé » et chaque pays le règle dans « Options du bot ».
+
+Quand le modèle a une nouvelle version, l'onglet **Réglages** du bot montre « Mettre à jour » : ça recopie les fichiers du modèle. Les plugins, leurs réglages, les données et les variables restent.
+
+Un modèle, c'est un dossier de `templates/` avec un `template.json` (`id`, `name`, `version`, `description`, `language`, `main_file`, `plugins`). `TEMPLATES_DIR` change le dossier.
 
 ### Plugins
 
@@ -223,7 +234,7 @@ L'onglet **Plugins** d'un bot ajoute des modules à ce bot, un peu comme les plu
 - **Variables** : un plugin peut demander des variables (ex. une clé d'API). Tu les remplis dans sa fiche ; elles sont gardées avec les autres variables du bot, et les secrets sont jamais réaffichés.
 - Redémarre le bot après avoir installé, mis à jour ou retiré un plugin. Les dépendances pip de chaque plugin (`plugins/<id>/requirements.txt`) s'installent au démarrage.
 
-Le code d'un plugin roule seulement dans le conteneur du bot, jamais dans le panel. Le bot doit **supporter les plugins Bot Panel** : c'est lui qui les charge (le bot amour le fait, voir `utils/plugins.py`). Le panel montre si chaque plugin est chargé, d'après le fichier `.botpanel/host.json` que le bot écrit à son démarrage.
+Le code d'un plugin roule seulement dans le conteneur du bot, jamais dans le panel. Le bot doit **supporter les plugins Bot Panel** : c'est lui qui les charge (les bots créés avec le modèle **Bot NG** le font, voir `templates/bot-ng/botng/plugins.py`). Le panel montre si chaque plugin est chargé, d'après le fichier `.botpanel/host.json` que le bot écrit à son démarrage.
 
 Variables du panel : `PLUGIN_CATALOG` (adresse de l'`index.json`, vide = seulement le téléversement) et `MAX_PLUGIN_MB` (5 par défaut).
 
@@ -257,15 +268,27 @@ Un plugin, c'est un dossier `plugins/<id>/` :
 - `pages` : ses pages dans « Options du bot », avec les mêmes types de champs que plus haut (`role_map` avec `keys`, `select` avec `choices`). Chaque page a une `section` : les valeurs y sont gardées par serveur Discord. Un plugin peut pas prendre une section du bot.
 - `enabled_by` : le réglage qui fait apparaître ses commandes slash sur un serveur (ex. `salut.active`).
 - `variables` : les variables d'environnement qu'il lit avec `os.getenv`.
+- `intents` : les intents privilégiés dont il a besoin (`members`, `message_content`, `presences`). Le bot demande seulement ceux de ses plugins, et le panel dit lesquels activer dans le Developer Portal.
 
 Dans `setup(bot)`, le plugin utilise `bot.plugin_host` :
 
 | `bot.plugin_host.…` | Ce que ça fait |
 |---|---|
 | `config(guild_id, section)` | les réglages d'un serveur (ceux de ses pages) |
+| `await save(guild_id, section, valeurs)` | enregistre des réglages (même d'un autre plugin) ; retourne les erreurs |
+| `sections()` | les sections qui ont une page, donc un plugin installé |
 | `data_dir(plugin_id)` | un dossier à lui, gardé quand le plugin est mis à jour ou retiré |
-| `send_log(guild_id, embed, categorie)` | un message dans le salon de logs du serveur |
+| `await open_db(plugin_id, schema)` | une base SQLite à lui (dans ce dossier), avec `one`, `all`, `run`, `get_value`, `set_value` |
+| `await send_log(guild_id, embed, categorie)` | un événement pour le salon de logs (écrit par le plugin Logs s'il est installé) |
 | `refresh_panel()` | redemande au bot d'envoyer son état au panel |
+
+Les plugins se parlent par des événements discord.py (`bot.dispatch`), jamais directement : un plugin absent fait juste rien.
+
+| Événement | Envoyé par | Écouté par |
+|---|---|---|
+| `botpanel_log(guild_id, embed, categorie)` | `plugin_host.send_log` | Logs |
+| `ng_linked(member)` | Synchro NationsGlory (un `/lier` accepté) | Bienvenue & accès (retire le rôle d'arrivée) |
+| `automod_warn(member, moderateur_id, raison)` | Auto-modération | Modération (garde l'avertissement) |
 
 Et ses Cogs peuvent avoir ces méthodes, que le bot appelle :
 

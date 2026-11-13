@@ -1,0 +1,139 @@
+{
+  "format": 1,
+  "id": "bienvenue",
+  "name": "Bienvenue & accès",
+  "version": "1.0.0",
+  "description": "Messages de bienvenue et de départ, MP de bienvenue, rôle d'arrivée à accès restreint retiré par un bouton « J'accepte » ou par la liaison NationsGlory.",
+  "author": "tristanlussier26-spec",
+  "runtime": "discord.py",
+  "intents": [
+    "members"
+  ],
+  "pages": [
+    {
+      "id": "bienvenue",
+      "section": "bienvenue",
+      "title": "Bienvenue",
+      "icon": "👋",
+      "description": "Messages quand quelqu'un arrive ou part du serveur.",
+      "fields": [
+        {
+          "key": "active",
+          "label": "Message de bienvenue",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "salon_id",
+          "label": "Salon de bienvenue",
+          "type": "channel",
+          "default": 0
+        },
+        {
+          "key": "titre",
+          "label": "Titre",
+          "type": "text",
+          "default": "Bienvenue sur {serveur}!",
+          "help": "Variables : {membre} (mention), {pseudo}, {serveur}, {nombre} (nombre de membres)"
+        },
+        {
+          "key": "message",
+          "label": "Message",
+          "type": "textarea",
+          "default": "Salut {membre} 👋\nTu es le membre n°{nombre}. Lie ton compte NationsGlory avec /lier pour avoir accès au serveur!",
+          "help": "Variables : {membre} (mention), {pseudo}, {serveur}, {nombre} (nombre de membres)"
+        },
+        {
+          "key": "image_url",
+          "label": "Image (lien, optionnel)",
+          "type": "text",
+          "default": "",
+          "help": "Grande image en bas du message de bienvenue."
+        },
+        {
+          "key": "mp_active",
+          "label": "Envoyer aussi un MP",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "mp_message",
+          "label": "Message en MP",
+          "type": "textarea",
+          "default": "Bienvenue sur {serveur}, {pseudo}!",
+          "help": "Variables : {membre} (mention), {pseudo}, {serveur}, {nombre} (nombre de membres)"
+        },
+        {
+          "key": "depart_active",
+          "label": "Message de départ",
+          "type": "bool",
+          "default": false
+        },
+        {
+          "key": "depart_salon_id",
+          "label": "Salon de départ",
+          "type": "channel",
+          "default": 0,
+          "help": "Vide = même salon que la bienvenue."
+        },
+        {
+          "key": "depart_message",
+          "label": "Message de départ",
+          "type": "textarea",
+          "default": "**{pseudo}** a quitté le serveur. On est maintenant {nombre}.",
+          "help": "Variables : {membre} (mention), {pseudo}, {serveur}, {nombre} (nombre de membres)"
+        }
+      ]
+    },
+    {
+      "id": "arrivee",
+      "section": "arrivee",
+      "title": "Arrivée & accès",
+      "icon": "🚪",
+      "description": "Rôle donné automatiquement aux nouveaux. Utilise-le pour leur cacher les salons tant qu'ils sont pas vérifiés.",
+      "fields": [
+        {
+          "key": "role_id",
+          "label": "Rôle d'arrivée (accès restreint)",
+          "type": "role",
+          "default": 0,
+          "help": "Donné à chaque nouveau membre. Enlève-lui la vue des salons à cacher."
+        },
+        {
+          "key": "retirer_quand",
+          "label": "Quand retirer ce rôle",
+          "type": "select",
+          "default": "liaison",
+          "choices": [
+            [
+              "liaison",
+              "Quand sa liaison NationsGlory est acceptée"
+            ],
+            [
+              "bouton",
+              "Quand il clique « J'accepte » sur le panneau de vérification"
+            ],
+            [
+              "jamais",
+              "Jamais (rôle permanent)"
+            ]
+          ]
+        },
+        {
+          "key": "role_verifie_id",
+          "label": "Rôle donné une fois vérifié",
+          "type": "role",
+          "default": 0,
+          "help": "Optionnel."
+        },
+        {
+          "key": "message_panneau",
+          "label": "Texte du panneau de vérification",
+          "type": "textarea",
+          "default": "Lis le règlement, puis clique sur le bouton pour avoir accès au serveur.",
+          "help": "Publie le panneau avec /verification-panneau."
+        }
+      ]
+    }
+  ]
+}
