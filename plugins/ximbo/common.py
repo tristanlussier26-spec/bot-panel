@@ -15,6 +15,16 @@ SOURCE_LABEL = {
 }
 
 
+def source_label(track) -> str:
+    """D'où vient la chanson ; une chanson Spotify/Deezer jouée par YouTube le dit aussi."""
+    mine = ((getattr(track, "raw_data", None) or {}).get("pluginInfo") or {}).get("ximbo") or {}
+    origin = mine.get("origin") or track.source
+    label = SOURCE_LABEL.get(origin, origin)
+    if mine and origin != "youtube" and track.source == "youtube":
+        label += " · audio YouTube"
+    return label
+
+
 def fmt_ms(ms: int | None) -> str:
     if ms is None:
         return "--:--"

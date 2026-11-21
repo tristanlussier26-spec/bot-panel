@@ -47,8 +47,8 @@ def test_lavalink_helpers():
                                             {"name": "youtube-plugin-1.13.3.jar", "browser_download_url": "p"}]}]
     assert pick_release(yt, COMPONENTS["youtube"][1]) == ("1.13.3", "p")
     assert pick_release([], COMPONENTS["lavasrc"][1], "4.") is None
-    assert heap_mb(1024) == 460 and heap_mb(256) == 256 and heap_mb(4096) == 768 and heap_mb(None) == 512
-    assert heap_mb(1024, "300") == 300 and heap_mb(1024, "abc") == 460
+    assert heap_mb(1024) == 409 and heap_mb(256) == 256 and heap_mb(4096) == 768 and heap_mb(None) == 512
+    assert heap_mb(1024, "300") == 300 and heap_mb(1024, "abc") == 409
 
     without = render_config(2333, 'mot"de passe')
     assert "address: 127.0.0.1" in without and 'password: "mot\\"de passe"' in without
@@ -60,8 +60,8 @@ def test_lavalink_helpers():
     # Apps Spotify en « Development mode » (février 2026) : playlists par l'API du lecteur web, pas de GET /artists
     yaml = pytest.importorskip("yaml")
     spotify = yaml.safe_load(with_keys)["plugins"]["lavasrc"]["spotify"]
-    assert spotify["preferPartnerApi"] is True and spotify["preferV1SearchApi"] is True
-    assert spotify["resolveArtistsInSearch"] is False and spotify["clientId"] == "id123"
+    assert spotify["preferPartnerApi"] is False and spotify["resolveArtistsInSearch"] is False
+    assert spotify["clientId"] == "id123"
     assert "preferPartnerApi" not in without
 
 
@@ -147,7 +147,8 @@ async def test_ximbo_plugin_loads_in_bot_ng(tmp_path):
 
         cog = bot.get_cog("Ximbo")
         info = dict(cog.panel_info(1))
-        assert info["Salons musique"] == "0" and info["Spotify"].startswith("pas configuré")
+        assert info["Salons musique"] == "0" and info["Recherche Spotify"].startswith("pas configurée")
+        assert "Lecture YouTube" in info
         assert "⏳" in info["Lavalink"]
         # Pas encore prêt : message clair au lieu d'une erreur
         from plugins.ximbo.cog import UserError

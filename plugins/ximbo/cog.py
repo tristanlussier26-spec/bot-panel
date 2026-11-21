@@ -29,8 +29,10 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from .common import COLOR, SOURCE_LABEL, SPOTIFY_URL_RE, URL_RE, channel_name, fmt_ms, missing_permissions, progress_bar, reply, search_order
+from . import links
+from .common import COLOR, SPOTIFY_URL_RE, URL_RE, channel_name, fmt_ms, missing_permissions, progress_bar, reply, search_order, source_label
 from .lavalink import LavalinkManager
+from .relay import RelayError, YoutubeRelay, pending_playable, ytdlp_available
 
 log = logging.getLogger("plugin.ximbo")
 
@@ -96,6 +98,34 @@ class XimboPlayer(wavelink.Player):
         self.filter_name = "Aucun"
         self.empty_since: float | None = None
 
+    async def play(self, track: wavelink.Playable, **kwargs) -> wavelink.Playable | None:
+        """Tout passe par ici (file, autoplay, titre précédent) : l'audio YouTube vient de yt-dlp, par le relais.
+
+        Une chanson introuvable ou illisible est annoncée dans le salon et Ximbo passe à la suivante (5 au plus).
+        """
+        cog = self.client.get_cog("Ximbo")
+        relay = getattr(cog, "relay", None)
+        if relay is None or not relay.running:
+            return await super().play(track, **kwargs)
+        for _ in range(5):
+            try:
+                prepared = await relay.prepare(track)
+            except RelayError as e:
+                log.warning("Lecture impossible de %r : %s", track.title, e)
+                if cog is not None:
+                    await cog.announce(self, f"⚠️ Impossible de lire **{track.title[:80]}** ({str(e)[:120]}) : je passe au suivant.")
+                try:
+                    track = self.queue.get()
+                except wavelink.QueueEmpty:
+                    if cog is not None:
+                        await cog.refresh(self.guild, self.room_id)
+                    return None
+                continue
+            return await super().play(prepared or track, **kwargs)
+        if cog is not None:
+            await cog.announce(self, "❌ 5 chansons de suite impossibles à lire : j'arrête. Regarde la console du bot.")
+        return None
+
 
 def _bass(f: wavelink.Filters) -> None:
     f.equalizer.set(bands=[{"band": i, "gain": g} for i, g in enumerate([0.30, 0.25, 0.20, 0.12, 0.05])])
@@ -147,7 +177,7 @@ def player_embed(room: dict, player: XimboPlayer | None) -> discord.Embed:
     e.add_field(name="Boucle", value=LOOP_LABEL.get(player.queue.mode, "?"))
     e.add_field(name="Autoplay", value="✨ Recommandations" if player.autoplay == wavelink.AutoPlayMode.enabled else "Désactivé")
     e.add_field(name="Filtre", value=player.filter_name)
-    e.add_field(name="Source", value=SOURCE_LABEL.get(t.source, t.source))
+    e.add_field(name="Source", value=source_label(t))
     req = requester_of(t)
     e.add_field(name="Demandé par", value=f"<@{req}>" if req else "✨ Autoplay")
     upcoming = list(itertools.islice(player.queue, 5))
@@ -436,6 +466,8 @@ class Ximbo(commands.Cog):
         sid, secret = os.getenv("XIMBO_SPOTIFY_ID", "").strip(), os.getenv("XIMBO_SPOTIFY_SECRET", "").strip()
         self.spotify = (sid, secret) if sid and secret else ("", "")
         self.external = os.getenv("XIMBO_LAVALINK_URI", "").strip()
+        self.relay: YoutubeRelay | None = None  # lecture YouTube par yt-dlp (seulement avec le Lavalink intégré)
+        self.relay_port = int(os.getenv("XIMBO_RELAY_PORT", "2334") or 2334)
 
     @property
     def spotify_ok(self) -> bool:
@@ -461,6 +493,8 @@ class Ximbo(commands.Cog):
                 await vc.disconnect()
         for task in self._tasks:
             task.cancel()
+        if self.relay is not None:
+            await self.relay.stop()
         if self.manager is not None:
             await self.manager.stop()
         if hasattr(wavelink.Pool, "close") and self._started:
@@ -486,6 +520,7 @@ class Ximbo(commands.Cog):
             self._tasks.append(asyncio.create_task(self.manager.run()))
             uri, password = self.manager.uri, self.manager.password
             self.node_status = "en attente de Lavalink"
+            await self.start_relay()
         node = wavelink.Node(identifier="ximbo", uri=uri, password=password, retries=None, inactive_player_timeout=300)
         self._tasks.append(asyncio.create_task(wavelink.Pool.connect(nodes=[node], client=self.bot, cache_capacity=100)))
         self._tasks.append(asyncio.create_task(self._branding()))
@@ -508,6 +543,28 @@ class Ximbo(commands.Cog):
         BRAND["icon"] = self.bot.user.display_avatar.with_size(256).url
         BRAND["name"] = self.bot.user.display_name
 
+    async def start_relay(self) -> None:
+        """YouTube refuse l'audio au plugin youtube-source de Lavalink : yt-dlp le trouve, et le relais le passe à Lavalink."""
+        if not ytdlp_available():
+            log.warning("yt-dlp est pas installé : YouTube passe par Lavalink seulement (souvent refusé)")
+            return
+        relay = YoutubeRelay(self.host.data_dir("ximbo") / "yt-dlp", port=self.relay_port)
+        try:
+            await relay.start()
+        except OSError as e:
+            log.error("Relais YouTube pas démarré (port %d) : %s", self.relay_port, e)
+            return
+        self.relay = relay
+
+    async def announce(self, player: XimboPlayer, text: str) -> None:
+        """Un petit message qui s'efface tout seul dans le salon de contrôle du lecteur."""
+        channel = player.guild.get_channel(player.room_id or 0) if player.guild else None
+        if channel is not None:
+            try:
+                await channel.send(text, delete_after=15)
+            except discord.HTTPException:
+                pass
+
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload) -> None:
         self.node_status = "prêt"
@@ -521,10 +578,18 @@ class Ximbo(commands.Cog):
             return f"⏳ {self.manager.status}"
         return f"⏳ {self.node_status}"
 
+    def youtube_status(self) -> str:
+        if self.relay is not None and self.relay.running:
+            return "✅ par yt-dlp"
+        if self.external:
+            return "par le Lavalink externe"
+        return "⚠️ par Lavalink seulement (yt-dlp pas installé)" if not ytdlp_available() else "⏳ en attente"
+
     def panel_info(self, guild_id: int) -> list[tuple[str, str]]:
         count = sum(1 for g in self.rooms.values() if g == guild_id)
-        spotify = "configuré" if self.spotify_ok else "pas configuré (variables XIMBO_SPOTIFY_ID et XIMBO_SPOTIFY_SECRET)"
-        return [("Lavalink", self.lavalink_status()), ("Spotify", spotify), ("Salons musique", str(count))]
+        search = "configurée" if self.spotify_ok else "pas configurée : les titres sont cherchés sur YouTube Music"
+        return [("Lavalink", self.lavalink_status()), ("Lecture YouTube", self.youtube_status()),
+                ("Recherche Spotify", search), ("Salons musique", str(count))]
 
     # ---------------- outils ----------------
     async def room(self, channel_id: int) -> dict | None:
@@ -596,8 +661,13 @@ class Ximbo(commands.Cog):
         msg = await channel.send(embed=embed, view=ControlsView())  # le message du lecteur a été effacé : on le refait
         await self.db.run("UPDATE rooms SET message_id = ? WHERE channel_id = ?", (msg.id, room_id))
 
-    async def search(self, query: str, guild_id: int) -> wavelink.Search:
+    async def search(self, query: str, guild_id: int) -> wavelink.Search | links.LinkResult:
         query = query.strip()
+        if self.relay is not None and self.relay.running and links.is_link(query):
+            try:  # playlists, albums et titres Spotify/Deezer : la liste des chansons, comme bot LeQueb
+                return await links.resolve(query, limit=PLAYLIST_MAX_TRACKS)
+            except links.LinkError as e:
+                raise UserError(f"❌ {e}") from e
         if SPOTIFY_URL_RE.match(query) and not self.spotify_ok:
             raise UserError("Les liens Spotify sont pas encore configurés : l'admin du bot doit remplir "
                             "XIMBO_SPOTIFY_ID et XIMBO_SPOTIFY_SECRET (onglet Variables). Écris plutôt le titre.")
@@ -667,7 +737,11 @@ class Ximbo(commands.Cog):
                 results = await self.search(query or "", member.guild.id)
                 if not results:
                     raise UserError(f"Aucun résultat pour **{(query or '')[:80]}**.")
-                if isinstance(results, wavelink.Playlist):
+                if isinstance(results, links.LinkResult):
+                    tracks = [pending_playable(m, port=self.relay_port) for m in results.tracks]
+                    if results.kind != "track":
+                        label = f"{links.LABEL[results.platform]} · 📃 **{results.name}**"
+                elif isinstance(results, wavelink.Playlist):
                     tracks, label = list(results.tracks), f"📃 **{results.name}**"
                 else:
                     tracks = [results[0]]
@@ -1017,6 +1091,9 @@ class Ximbo(commands.Cog):
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload) -> None:
         if isinstance(payload.player, XimboPlayer):
+            if self.relay is not None and len(payload.player.queue):  # la suivante est prête quand celle-ci finit
+                self._tasks.append(asyncio.create_task(self.relay.warm(payload.player.queue[0])))
+                self._tasks = [t for t in self._tasks if not t.done()]
             self.votes.pop(payload.player.guild.id, None)   # nouveau titre : les votes repartent à zéro
             await self.refresh(payload.player.guild, payload.player.room_id)
             await self.refresh_card(payload.player.guild, payload.player.room_id)

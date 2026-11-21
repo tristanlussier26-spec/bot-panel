@@ -1,2 +1,7 @@
 # 3.5.2+ : envoie le channelId que Lavalink exige pour le chiffrement vocal DAVE (obligatoire sur Discord depuis mars 2026)
 wavelink>=3.5.2,<4
+# L'audio YouTube : yt-dlp + deno (défis JavaScript de YouTube), comme bot LeQueb. Ximbo le met à jour chaque jour.
+yt-dlp[default]>=2026.10.26
+deno>=2.5
+# Les liens Spotify (playlists, albums) sans clé d'API
+spotifyscraper>=3.9,<4

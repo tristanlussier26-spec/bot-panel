@@ -1,6 +1,6 @@
 # Ximbo 🎧
 
-Bot musique à créer dans Bot Panel (**Nouveau bot › Modèle : Ximbo**). Un membre tape **`/ximbo on`** dans le clavardage de son vocal (ou clique sur **« Créer mon bot musique »**) : Ximbo le rejoint et lui ouvre un **salon privé** pour contrôler le bot. Il y écrit un titre ou colle un lien Spotify (playlists et albums aussi), et peut inviter d'autres personnes à contrôler.
+Bot musique à créer dans Bot Panel (**Nouveau bot › Modèle : Ximbo**). Un membre tape **`/ximbo on`** dans le clavardage de son vocal (ou clique sur **« Créer mon bot musique »**) : Ximbo le rejoint et lui ouvre un **salon privé** pour contrôler le bot. Il y écrit un titre ou colle un lien Spotify, Deezer ou YouTube (playlists et albums aussi), et peut inviter d'autres personnes à contrôler.
 
 C'est un **Bot NG** (dossier `botng/`) avec le plugin **ximbo** installé d'office. Tu peux lui ajouter d'autres plugins dans l'onglet Plugins.
 
@@ -9,9 +9,9 @@ C'est un **Bot NG** (dossier `botng/`) avec le plugin **ximbo** installé d'offi
 1. [Developer Portal](https://discord.com/developers/applications) › ton application :
    - **Bot › Reset Token**, copie le jeton ;
    - **Bot › Privileged Gateway Intents** : active **Message Content Intent** (pour lire les titres écrits dans les salons).
-2. Spotify (facultatif mais conseillé) : [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) › **Create app** (Redirect URI : `http://127.0.0.1:8888/callback`, coche **Web API**), copie le **Client ID** et le **Client secret**. Depuis février 2026, le compte qui crée l'app doit avoir **Spotify Premium**. Les playlists passent par l'API du lecteur web de Spotify (l'API officielle les donne plus aux nouvelles apps).
+2. Spotify (facultatif) : seulement pour **chercher les titres tapés sur Spotify**. Les liens Spotify (playlists, albums) marchent sans. [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) › **Create app** (Redirect URI : `http://127.0.0.1:8888/callback`, coche **Web API**), copie le **Client ID** et le **Client secret**. Depuis février 2026, le compte qui crée l'app doit avoir **Spotify Premium**.
 3. Bot Panel › **Nouveau bot** › modèle **Ximbo**, avec **1024 Mo de RAM** au moins (Lavalink roule en Java dans le bot).
-4. Onglet **Variables** : `DISCORD_TOKEN`. Onglet **Plugins › Ximbo** : `XIMBO_SPOTIFY_ID` et `XIMBO_SPOTIFY_SECRET`.
+4. Onglet **Variables** : `DISCORD_TOKEN`. Onglet **Plugins › Ximbo** (facultatif) : `XIMBO_SPOTIFY_ID` et `XIMBO_SPOTIFY_SECRET`.
 5. Démarre le bot. **Le premier démarrage prend quelques minutes** : il télécharge Java et Lavalink (~200 Mo, une seule fois). `/ximbo-statut` montre où il en est.
 6. Invite le bot avec les permissions : Voir les salons, Envoyer des messages, Intégrer des liens, Gérer les messages, Lire l'historique, **Gérer les salons**, **Gérer les rôles**, Se connecter, Parler.
 7. **Options du bot › Ximbo** : coche « Ximbo activé ». Ensuite, `/ximbo on` dans le clavardage de n'importe quel vocal ; `/ximbo-panneau` publie aussi le bouton dans un salon.
@@ -33,7 +33,7 @@ Dans le clavardage du vocal, une **carte « en lecture »** montre le titre, la 
 ## Ce qu'il fait
 
 - Un salon de contrôle privé par membre, avec un lecteur à jour en direct (pochette, progression, 5 prochains titres)
-- Titres, playlists et albums **Spotify**, YouTube, YouTube Music, SoundCloud, Twitch, Bandcamp, liens audio directs
+- Titres, playlists et albums **Spotify** et **Deezer**, YouTube, YouTube Music, SoundCloud, Twitch, Bandcamp, liens audio directs
 - Boutons : ⏮️ ⏯️ ⏭️ ⏹️ 🔀, volume, boucle titre/file, ✨ autoplay (recommandations), 📜 file
 - Filtres : bass boost, nightcore, vaporwave, 8D, karaoké
 - **👥 Inviter** des amis à contrôler (ou ils le demandent avec 🙋), **❌ Fermer** le salon
@@ -45,6 +45,8 @@ Un bot Discord est dans **un seul vocal par serveur** : si quelqu'un écoute dé
 
 ## Bon à savoir
 
-- Spotify diffuse pas l'audio aux bots : Ximbo prend les infos sur Spotify et joue le même titre depuis YouTube Music (ou SoundCloud en secours).
-- Si YouTube bloque l'adresse de ton serveur (« Sign in to confirm you're not a bot »), redémarre le bot le lendemain : il vérifie les mises à jour du plugin YouTube deux fois par jour.
-- Tout ce que Lavalink télécharge est dans `data/plugins/ximbo/lavalink/`. Efface ce dossier pour tout réinstaller.
+- Spotify et Deezer diffusent pas l'audio aux bots : Ximbo lit la liste des chansons (pour Spotify, par ses pages publiques, avec spotifyscraper, sans clé d'API ; l'API officielle donne plus les playlists aux nouvelles apps depuis février 2026), puis cherche chaque chanson sur YouTube **au moment de la jouer**, en prenant le résultat qui a la bonne durée. La suivante se prépare pendant que la courante joue.
+- L'audio YouTube vient de **yt-dlp** (avec deno pour les défis JavaScript de YouTube) : YouTube refuse l'audio au plugin youtube-source de Lavalink. Ximbo le relaie à Lavalink par un petit serveur local (`127.0.0.1:2334`, variable `XIMBO_RELAY_PORT`), alors les filtres, le volume et l'avance rapide marchent pareil. Les playlists Spotify doivent être **publiques**.
+- yt-dlp se met à jour tout seul une fois par jour (YouTube change souvent) ; la nouvelle version sert au prochain redémarrage. Si YouTube se met à tout refuser, redémarre le bot.
+- Une chanson introuvable ou illisible est annoncée dans le salon et Ximbo passe à la suivante.
+- Tout ce que Lavalink télécharge est dans `data/plugins/ximbo/lavalink/` (et le cache de yt-dlp dans `data/plugins/ximbo/yt-dlp/`). Efface ces dossiers pour tout réinstaller.

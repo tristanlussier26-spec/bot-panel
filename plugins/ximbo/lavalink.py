@@ -73,12 +73,15 @@ def container_memory_mb() -> int | None:
 
 
 def heap_mb(limit_mb: int | None, wanted: str | None = None) -> int:
-    """Mémoire donnée à Java : la variable XIMBO_JAVA_MB, sinon ~45 % de la RAM du bot (entre 256 et 768 Mo)."""
+    """Mémoire donnée à Java : la variable XIMBO_JAVA_MB, sinon ~40 % de la RAM du bot (entre 256 et 768 Mo).
+
+    Le reste va au bot et à yt-dlp (+ deno), qui trouvent l'audio YouTube.
+    """
     if wanted and wanted.strip().isdigit():
         return max(128, int(wanted.strip()))
     if not limit_mb:
         return 512
-    return max(256, min(768, int(limit_mb * 0.45)))
+    return max(256, min(768, int(limit_mb * 0.40)))
 
 
 def _q(value: str) -> str:
@@ -142,11 +145,10 @@ def render_config(port: int, password: str, spotify_id: str = "", spotify_secret
             f"      countryCode: {_q(country)}",
             "      playlistLoadLimit: 10",
             "      albumLoadLimit: 6",
-            # Depuis février 2026, une app Spotify en « Development mode » reçoit plus le contenu des playlists
-            # (seulement celles de l'utilisateur connecté, et Ximbo en connecte aucun) : playlists, albums et
-            # recommandations (autoplay) passent par l'API du lecteur web, avec retour à l'API officielle si elle lâche.
-            "      preferPartnerApi: true",
-            "      preferV1SearchApi: true",  # la recherche reste sur l'API officielle (plus rapide)
+            # LavaSrc sert juste à la recherche « spsearch: » : les liens Spotify sont lus par Ximbo (links.py),
+            # parce que depuis février 2026 l'API officielle donne plus les playlists aux nouvelles apps.
+            # Son « API partenaire » trouve plus sa clé sur le site de Spotify : on la laisse fermée.
+            "      preferPartnerApi: false",
             "      resolveArtistsInSearch: false",  # GET /artists?ids= retiré pour ces apps : ferait planter la recherche
         ]
     lines += ["logging:", "  level:", "    root: WARN", "    lavalink: INFO"]
