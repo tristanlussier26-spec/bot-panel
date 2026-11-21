@@ -1,6 +1,6 @@
 # Ximbo 🎧
 
-Bot musique à créer dans Bot Panel (**Nouveau bot › Modèle : Ximbo**). Un membre clique sur **« Créer mon bot musique »** et reçoit un **salon privé** pour contrôler le bot : il y écrit un titre ou colle un lien Spotify, et Ximbo joue dans son vocal.
+Bot musique à créer dans Bot Panel (**Nouveau bot › Modèle : Ximbo**). Un membre tape **`/ximbo on`** dans le clavardage de son vocal (ou clique sur **« Créer mon bot musique »**) : Ximbo le rejoint et lui ouvre un **salon privé** pour contrôler le bot. Il y écrit un titre ou colle un lien Spotify (playlists et albums aussi), et peut inviter d'autres personnes à contrôler.
 
 C'est un **Bot NG** (dossier `botng/`) avec le plugin **ximbo** installé d'office. Tu peux lui ajouter d'autres plugins dans l'onglet Plugins.
 
@@ -14,7 +14,21 @@ C'est un **Bot NG** (dossier `botng/`) avec le plugin **ximbo** installé d'offi
 4. Onglet **Variables** : `DISCORD_TOKEN`. Onglet **Plugins › Ximbo** : `XIMBO_SPOTIFY_ID` et `XIMBO_SPOTIFY_SECRET`.
 5. Démarre le bot. **Le premier démarrage prend quelques minutes** : il télécharge Java et Lavalink (~200 Mo, une seule fois). `/ximbo-statut` montre où il en est.
 6. Invite le bot avec les permissions : Voir les salons, Envoyer des messages, Intégrer des liens, Gérer les messages, Lire l'historique, **Gérer les salons**, **Gérer les rôles**, Se connecter, Parler.
-7. **Options du bot › Ximbo** : coche « Ximbo activé », puis `/ximbo-panneau` dans le salon où tu veux le bouton.
+7. **Options du bot › Ximbo** : coche « Ximbo activé ». Ensuite, `/ximbo on` dans le clavardage de n'importe quel vocal ; `/ximbo-panneau` publie aussi le bouton dans un salon.
+
+## Commandes
+
+| Commande | Ce qu'elle fait |
+|---|---|
+| `/ximbo on [recherche]` | Dans le clavardage d'un vocal : Ximbo rejoint ce vocal, ouvre ton salon de contrôle et peut lancer un titre ou une playlist tout de suite |
+| `/ximbo off [garder_salon]` | Arrête la musique et ferme ton salon (ou le garde) |
+| `/ximbo inviter @membre` · `/ximbo retirer @membre` | Donne ou retire le contrôle |
+| `/ximbo jouer recherche [melanger] [ensuite]` | Ajoute un titre, un album ou une playlist, avec suggestions pendant que tu tapes |
+| `/ximbo file` | La file d'attente |
+| `/ximbo playlist sauver · charger · liste · supprimer` | Tes playlists perso (titre en cours + file), gardées d'un serveur à l'autre |
+| `/ximbo-panneau` · `/ximbo-fermer` · `/ximbo-statut` | Bouton « Créer mon bot musique », fermer son salon, état du lecteur |
+
+Dans le clavardage du vocal, une **carte « en lecture »** montre le titre, la suite et qui contrôle, avec trois boutons pour tout le monde : **🙋 Demander le contrôle** (le propriétaire accepte ou refuse dans son salon), **⏭️ Voter pour passer** (la moitié des gens du vocal suffit ; un contrôleur passe tout de suite) et **📜 File**.
 
 ## Ce qu'il fait
 
@@ -22,7 +36,8 @@ C'est un **Bot NG** (dossier `botng/`) avec le plugin **ximbo** installé d'offi
 - Titres, playlists et albums **Spotify**, YouTube, YouTube Music, SoundCloud, Twitch, Bandcamp, liens audio directs
 - Boutons : ⏮️ ⏯️ ⏭️ ⏹️ 🔀, volume, boucle titre/file, ✨ autoplay (recommandations), 📜 file
 - Filtres : bass boost, nightcore, vaporwave, 8D, karaoké
-- **👥 Inviter** des amis dans ton salon, **❌ Fermer** le salon
+- **👥 Inviter** des amis à contrôler (ou ils le demandent avec 🙋), **❌ Fermer** le salon
+- Playlists perso : `/ximbo playlist sauver` garde le titre en cours et la file (500 titres max, 25 playlists)
 - Quitte le vocal quand il joue plus rien ou qu'il est seul
 - Réglages par serveur (Options du bot) : catégorie des salons, rôle qui peut en créer, nombre max, recherche par défaut, volume
 
