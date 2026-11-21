@@ -111,16 +111,18 @@ class Bot(commands.Bot):
                 return option
         return None
 
+    def command_enabled(self, command, guild_id: int | None) -> bool:
+        """Une commande d'un plugin à activer existe seulement sur les serveurs où il est activé."""
+        option = self.optional_module(getattr(command, "module", "") or "")
+        return not option or bool(self.config_for(guild_id).get(option[0], {}).get(option[1]))
+
     async def sync_guild_commands(self, guild_id: int, *, force: bool = False) -> None:
         """Enregistre sur un serveur les commandes des plugins qui y sont activés (seulement si ça a changé)."""
-        cfg = self.config_for(guild_id)
         guild = discord.Object(id=guild_id)
         self.tree.clear_commands(guild=guild)
         for command in self.tree.get_commands():
-            option = self.optional_module(getattr(command, "module", "") or "")
-            if option and not cfg.get(option[0], {}).get(option[1]):
-                continue
-            self.tree.add_command(command, guild=guild, override=True)
+            if self.command_enabled(command, guild_id):
+                self.tree.add_command(command, guild=guild, override=True)
         payload = sorted((c.to_dict(self.tree) for c in self.tree.get_commands(guild=guild)), key=lambda d: d["name"])
         signature = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
         key = f"cmdsig:{guild_id}"

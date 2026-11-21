@@ -24,6 +24,8 @@ class General(commands.Cog):
         for cmd in self.bot.tree.walk_commands():
             if isinstance(cmd, app_commands.Group):
                 continue
+            if not self.bot.command_enabled(cmd.root_parent or cmd, interaction.guild_id):
+                continue  # plugin pas activé sur ce serveur : ses commandes y existent pas
             required = (cmd.root_parent or cmd).default_permissions
             if required is not None and not required <= interaction.permissions:
                 continue  # on cache les commandes que le membre peut pas utiliser
