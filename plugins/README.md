@@ -17,5 +17,6 @@ Les plugins qu'on installe depuis l'onglet **Plugins** d'un bot (fait avec le mo
 | [`roles`](roles/) | Jusqu'à 3 panneaux de rôles à boutons (alertes, jeux, couleurs), mode « un seul à la fois ». | — |
 | [`evenements`](evenements/) | Guerres, réunions et événements : présences par boutons, rappels automatiques avec mention. | — |
 | [`musique`](musique/) | Lecteur vocal : liens audio, radios en ligne, fichiers ; file, pause, volume, rôle DJ. Pas YouTube ni Spotify. Installe ffmpeg (~200 Mo) au premier démarrage. | — |
+| [`ximbo`](ximbo/) | Bot musique Spotify : bouton « Créer mon bot musique », un salon de contrôle privé par membre, lecteur à boutons, file, boucle, autoplay, filtres. Lavalink (Java) s'installe dans le bot au premier démarrage : prévois 1 Go de RAM. Installé d'office par le modèle **Ximbo**. Variables `XIMBO_SPOTIFY_ID` / `XIMBO_SPOTIFY_SECRET` pour Spotify. | Message Content |
 
 Pour écrire un plugin ou en ajouter un ici : voir « Plugins » dans le [README de Bot Panel](../README.md#plugins). Après une modification, monte la `version` dans `plugin.json` et lance `python scripts/build_catalog.py`.

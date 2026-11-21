@@ -46,12 +46,15 @@ def startup_command(bot: dict) -> str:
             "npm install --omit=dev --no-audit --no-fund --loglevel=error || exit 1; fi; "
             f"exec node {main}"
         )
-    # Les dépendances du bot, puis celles de ses plugins (plugins/<id>/requirements.txt)
+    # Les dépendances du bot, puis celles de ses plugins (plugins/<id>/requirements.txt).
+    # pip travaille dans le dossier du bot : /tmp fait 64 Mo (en mémoire), trop peu pour un gros paquet.
     return (
         "for req in requirements.txt plugins/*/requirements.txt; do "
         "if [ -f \"$req\" ]; then echo \"[Panel] Installation des dépendances (pip) : $req\"; "
-        "python3 -m pip install --user --disable-pip-version-check --no-warn-script-location -q -r \"$req\" "
-        "|| exit 1; fi; done; "
+        "mkdir -p \"$HOME/.cache/pip-tmp\"; "
+        "TMPDIR=\"$HOME/.cache/pip-tmp\" python3 -m pip install --user --disable-pip-version-check "
+        "--no-warn-script-location -q -r \"$req\" || exit 1; fi; done; "
+        "rm -rf \"$HOME/.cache/pip-tmp\"; "
         f"exec python3 -u {main}"
     )
 
@@ -96,6 +99,7 @@ class BotRuntime:
         self.console = ConsoleHub()
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._last_crash: dict[str, float] = {}
+        self.host_cpus: float | None = None  # processeurs de la machine Docker : la limite CPU d'un bot en dépend
 
     # ---- Connexion à Docker ------------------------------------------------------------
     async def connect(self) -> None:
@@ -105,6 +109,10 @@ class BotRuntime:
         except Exception as e:
             raise RuntimeError_(f"Docker est pas joignable ({e}). Le panel doit avoir accès à /var/run/docker.sock.") from e
         self.host_data_dir = self.settings.host_data_dir or await self._detect_host_data_dir() or self.settings.data_dir
+        try:
+            self.host_cpus = float((await self.docker.system.info()).get("NCPU") or 0) or None
+        except Exception:  # noqa: BLE001  (pas grave : Docker dira lui-même si la limite est trop haute)
+            self.host_cpus = None
         await self.ensure_network()
         log.info("Docker %s connecté, dossiers des bots sur l'hôte : %s", version.get("Version"), self.host_data_dir / "bots")
 
@@ -157,6 +165,15 @@ class BotRuntime:
     def host_path(self, bot_id: str) -> str:
         return str(self.host_data_dir / "bots" / bot_id)
 
+    def cpu_limit(self, bot: dict) -> float:
+        """Nombre de processeurs permis au bot : sa limite (100 % = un cœur), au plus ceux de la machine
+        (Docker refuse un conteneur qui demande plus de processeurs qu'il y en a).
+        C'est un plafond, rien n'est réservé : le total des bots peut dépasser la machine (surallocation).
+        Quand ils forcent tous en même temps, ils se partagent les cœurs selon leur allocation (CpuShares)
+        et ralentissent, sans planter."""
+        cpus = max(0.01, int(bot["cpu_percent"]) / 100)
+        return min(cpus, self.host_cpus) if self.host_cpus else cpus
+
     def container_config(self, bot: dict, env: dict[str, str]) -> dict:
         base_env = {
             "HOME": WORKDIR,
@@ -185,7 +202,8 @@ class BotRuntime:
                 "Binds": [f"{self.host_path(bot['id'])}:{WORKDIR}"],
                 "Memory": ram,
                 "MemorySwap": ram,
-                "NanoCpus": int(int(bot["cpu_percent"]) / 100 * 1e9),
+                "NanoCpus": int(self.cpu_limit(bot) * 1e9),
+                "CpuShares": max(2, min(262144, int(1024 * int(bot["cpu_percent"]) / 100))),  # part quand ça bloque
                 "PidsLimit": 256,
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges:true"],
@@ -216,8 +234,12 @@ class BotRuntime:
             old = await self._get(bot["id"])
             if old is not None:
                 await old.delete(force=True)
-            container = await self.docker.containers.create(self.container_config(bot, env), name=self.name(bot["id"]))
-            await container.start()
+            try:
+                container = await self.docker.containers.create(self.container_config(bot, env), name=self.name(bot["id"]))
+                await container.start()
+            except DockerError as e:
+                message = e.message.get("message", e.message) if isinstance(e.message, dict) else e.message
+                raise RuntimeError_(f"Docker refuse de démarrer le bot : {message}") from e
             self.console.publish(bot["id"], "Bot démarré.")
 
     async def stop(self, bot_id: str, *, kill: bool = False) -> None:

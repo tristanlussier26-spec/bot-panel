@@ -238,7 +238,11 @@ function settingsForm(bot, onSubmit, submitLabel, kits = []) {
     langs.closest(".field").hidden = !!kit;
     mainInput.closest(".field").hidden = !!kit;
     cmdField.hidden = !!kit;
-    fill(kitHint, kit ? [kit.description, kit.plugins.length ? ` Plugins installés d'office : ${kit.plugins.join(", ")}.` : ""] :
+    // RAM conseillée par le modèle (ex. Ximbo fait rouler Java) : on monte la valeur si elle est plus basse
+    const ramInput = form.querySelector("#f-ram");
+    if (kit && kit.ram_mb && ramInput && Number(ramInput.value) < kit.ram_mb) ramInput.value = kit.ram_mb;
+    fill(kitHint, kit ? [kit.description, kit.plugins.length ? ` Plugins installés d'office : ${kit.plugins.join(", ")}.` : "",
+      kit.ram_mb ? ` RAM conseillée : ${kit.ram_mb} Mo.` : ""] :
       "Tu mets tes propres fichiers (ou un petit bot d'exemple est créé).");
   }
   kitSelect.addEventListener("change", applyKit);
@@ -260,7 +264,7 @@ function settingsForm(bot, onSubmit, submitLabel, kits = []) {
         h("input", { type: "number", id: "f-ram", name: "ram_mb", min: 64, max: 16384, step: 64, value: bot.ram_mb })),
       h("div", { class: "field" }, h("label", { for: "f-cpu" }, "CPU max (%)"),
         h("input", { type: "number", id: "f-cpu", name: "cpu_percent", min: 10, max: 800, step: 10, value: bot.cpu_percent }),
-        h("span", { class: "hint" }, "100 % = un cœur au complet."))),
+        h("span", { class: "hint" }, "100 % = un cœur. C'est un plafond : tu peux allouer plus que la machine, les bots se partagent alors le processeur."))),
     h("div", { class: "field" }, h("label", { class: "check" },
       h("input", { type: "checkbox", name: "auto_restart", checked: bot.auto_restart }),
       h("span", {}, "Redémarrer tout seul s'il plante", h("span", { class: "hint" }, "S'il plante deux fois en moins d'une minute, le panel arrête d'essayer.")))),

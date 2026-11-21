@@ -224,6 +224,7 @@ def test_startup_installs_plugin_requirements():
     from botpanel.runtime import startup_command
     cmd = startup_command({"language": "python", "main_file": "bot.py"})
     assert "plugins/*/requirements.txt" in cmd and cmd.endswith("exec python3 -u bot.py")
+    assert 'TMPDIR="$HOME/.cache/pip-tmp" python3 -m pip install' in cmd  # pas dans le /tmp de 64 Mo
 
 
 def test_catalog_is_up_to_date():

@@ -593,3 +593,23 @@ async def test_music(tmp_path, monkeypatch):
         player.idle_since -= 61  # plus de musique depuis 1 minute : il quitte
         await cog.idle_check.coro(cog)
         assert not voice.connected and player.voice is None
+
+
+async def test_aide_lists_only_enabled_plugin_commands(tmp_path):
+    """/aide montre pas les commandes d'un plugin qui est pas activé sur ce serveur (elles y existent pas)."""
+    async with ng_bot(tmp_path, "niveaux") as bot:
+        cog = bot.get_cog("General")
+        guild, *_ = make_guild()
+
+        async def aide() -> str:
+            i = inter(guild, SimpleNamespace(id=1))
+            i.permissions = discord.Permissions.all()
+            await cog.aide.callback(cog, i)
+            return i.response.sent[-1]["embed"].description
+
+        text = await aide()
+        assert "`/ping`" in text and "`/rang`" not in text
+        assert not bot.command_enabled(bot.tree.get_command("rang"), 555)
+        assert await bot.save_section(555, "niveaux", {"active": True}) == []
+        assert "`/rang`" in await aide() and bot.command_enabled(bot.tree.get_command("rang"), 555)
+        assert bot.command_enabled(bot.tree.get_command("ping"), None)
