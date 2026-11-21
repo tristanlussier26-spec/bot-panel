@@ -3,7 +3,8 @@
     python scripts/build_catalog.py          # reconstruit après avoir modifié un plugin
     python scripts/build_catalog.py --check  # vérifie que le catalogue est à jour (tests et GitHub Actions)
 
-Les zips sont reproductibles (mêmes fichiers = même sha256), donc un plugin pas modifié garde son zip.
+Un plugin pas modifié garde son zip : si le zip de dist/ a déjà exactement les mêmes fichiers, on le réutilise tel quel.
+(La compression change d'une machine à l'autre, zlib ou zlib-ng : on compare donc le contenu, pas les octets du zip.)
 """
 from __future__ import annotations
 
@@ -45,6 +46,11 @@ def build_zip(folder: Path) -> bytes:
     return buffer.getvalue()
 
 
+def zip_contents(data: bytes) -> dict[str, bytes]:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return {info.filename: z.read(info) for info in z.infolist()}
+
+
 def build() -> tuple[dict, dict[str, bytes]]:
     entries, zips = [], {}
     for folder in plugin_dirs():
@@ -52,6 +58,13 @@ def build() -> tuple[dict, dict[str, bytes]]:
         if manifest["id"] != folder.name:
             raise PluginError(f"{folder.name} : l'id de plugin.json doit être le nom du dossier")
         data = build_zip(folder)
+        existing = DIST / f"{manifest['id']}-{manifest['version']}.zip"
+        if existing.is_file():  # mêmes fichiers dedans : on garde le zip déjà publié (même sha256)
+            try:
+                if zip_contents(old := existing.read_bytes()) == zip_contents(data):
+                    data = old
+            except zipfile.BadZipFile:
+                pass
         read_zip(data, max_bytes=50 * 1024 * 1024)  # le panel doit l'accepter
         name = f"{manifest['id']}-{manifest['version']}.zip"
         zips[name] = data
