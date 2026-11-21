@@ -264,7 +264,7 @@ function settingsForm(bot, onSubmit, submitLabel, kits = []) {
         h("input", { type: "number", id: "f-ram", name: "ram_mb", min: 64, max: 16384, step: 64, value: bot.ram_mb })),
       h("div", { class: "field" }, h("label", { for: "f-cpu" }, "CPU max (%)"),
         h("input", { type: "number", id: "f-cpu", name: "cpu_percent", min: 10, max: 800, step: 10, value: bot.cpu_percent }),
-        h("span", { class: "hint" }, "100 % = un cœur au complet."))),
+        h("span", { class: "hint" }, "100 % = un cœur. C'est un plafond : tu peux allouer plus que la machine, les bots se partagent alors le processeur."))),
     h("div", { class: "field" }, h("label", { class: "check" },
       h("input", { type: "checkbox", name: "auto_restart", checked: bot.auto_restart }),
       h("span", {}, "Redémarrer tout seul s'il plante", h("span", { class: "hint" }, "S'il plante deux fois en moins d'une minute, le panel arrête d'essayer.")))),
