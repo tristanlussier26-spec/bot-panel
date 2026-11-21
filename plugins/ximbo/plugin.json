@@ -2,7 +2,7 @@
   "format": 1,
   "id": "ximbo",
   "name": "Ximbo (musique Spotify)",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Bot musique : /ximbo on dans le clavardage d'un vocal (ou le bouton « Créer mon bot musique ») donne à chaque membre son salon de contrôle privé, et une carte « en lecture » dans le vocal (demander le contrôle, voter pour passer). Titres et liens Spotify (playlists, albums), YouTube et SoundCloud, lecteur à boutons, file, boucle, autoplay, filtres, contrôleurs invités, playlists perso. Lavalink est installé dans le bot au premier démarrage (prévois 1 Go de RAM).",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",

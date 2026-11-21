@@ -57,6 +57,12 @@ def test_lavalink_helpers():
     assert "port: 2444" in with_keys and "spotify: true" in with_keys
     assert 'clientId: "id123"' in with_keys and 'clientSecret: "secret456"' in with_keys
     assert '- "ytmsearch:\\"%ISRC%\\""' in with_keys and "youtube: false" in with_keys
+    # Apps Spotify en « Development mode » (février 2026) : playlists par l'API du lecteur web, pas de GET /artists
+    yaml = pytest.importorskip("yaml")
+    spotify = yaml.safe_load(with_keys)["plugins"]["lavasrc"]["spotify"]
+    assert spotify["preferPartnerApi"] is True and spotify["preferV1SearchApi"] is True
+    assert spotify["resolveArtistsInSearch"] is False and spotify["clientId"] == "id123"
+    assert "preferPartnerApi" not in without
 
 
 async def test_lavalink_install_and_update(tmp_path, monkeypatch):

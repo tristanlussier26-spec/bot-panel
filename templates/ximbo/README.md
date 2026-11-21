@@ -9,7 +9,7 @@ C'est un **Bot NG** (dossier `botng/`) avec le plugin **ximbo** installé d'offi
 1. [Developer Portal](https://discord.com/developers/applications) › ton application :
    - **Bot › Reset Token**, copie le jeton ;
    - **Bot › Privileged Gateway Intents** : active **Message Content Intent** (pour lire les titres écrits dans les salons).
-2. Spotify (facultatif mais conseillé) : [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) › **Create app** (Redirect URI : `http://127.0.0.1`), copie le **Client ID** et le **Client secret**.
+2. Spotify (facultatif mais conseillé) : [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) › **Create app** (Redirect URI : `http://127.0.0.1:8888/callback`, coche **Web API**), copie le **Client ID** et le **Client secret**. Depuis février 2026, le compte qui crée l'app doit avoir **Spotify Premium**. Les playlists passent par l'API du lecteur web de Spotify (l'API officielle les donne plus aux nouvelles apps).
 3. Bot Panel › **Nouveau bot** › modèle **Ximbo**, avec **1024 Mo de RAM** au moins (Lavalink roule en Java dans le bot).
 4. Onglet **Variables** : `DISCORD_TOKEN`. Onglet **Plugins › Ximbo** : `XIMBO_SPOTIFY_ID` et `XIMBO_SPOTIFY_SECRET`.
 5. Démarre le bot. **Le premier démarrage prend quelques minutes** : il télécharge Java et Lavalink (~200 Mo, une seule fois). `/ximbo-statut` montre où il en est.

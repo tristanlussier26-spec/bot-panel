@@ -142,6 +142,12 @@ def render_config(port: int, password: str, spotify_id: str = "", spotify_secret
             f"      countryCode: {_q(country)}",
             "      playlistLoadLimit: 10",
             "      albumLoadLimit: 6",
+            # Depuis février 2026, une app Spotify en « Development mode » reçoit plus le contenu des playlists
+            # (seulement celles de l'utilisateur connecté, et Ximbo en connecte aucun) : playlists, albums et
+            # recommandations (autoplay) passent par l'API du lecteur web, avec retour à l'API officielle si elle lâche.
+            "      preferPartnerApi: true",
+            "      preferV1SearchApi: true",  # la recherche reste sur l'API officielle (plus rapide)
+            "      resolveArtistsInSearch: false",  # GET /artists?ids= retiré pour ces apps : ferait planter la recherche
         ]
     lines += ["logging:", "  level:", "    root: WARN", "    lavalink: INFO"]
     return "\n".join(lines) + "\n"
