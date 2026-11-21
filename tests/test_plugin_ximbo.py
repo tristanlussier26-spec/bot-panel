@@ -3,6 +3,7 @@ import json
 import re
 from types import SimpleNamespace
 
+import discord
 import pytest
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
@@ -216,8 +217,11 @@ async def test_create_room_and_messages(tmp_path):
         channels = {}
         sent = AsyncMock(return_value=SimpleNamespace(id=88))
         room_channel = SimpleNamespace(id=77, mention="<#77>", send=sent)
+        class Me(str):  # guild.me : sert de clé dans les permissions du salon
+            guild_permissions = discord.Permissions.all()
+
         guild = SimpleNamespace(
-            id=1, default_role="everyone", me="moi", voice_client=None, get_channel=lambda cid: channels.get(cid),
+            id=1, name="Serveur", default_role="everyone", me=Me("moi"), voice_client=None, get_channel=lambda cid: channels.get(cid),
             create_category=AsyncMock(return_value=SimpleNamespace(id=66)),
             create_text_channel=AsyncMock(side_effect=lambda *a, **k: channels.setdefault(77, room_channel)))
         member = Member(5, guild)
@@ -242,6 +246,21 @@ async def test_create_room_and_messages(tmp_path):
         assert "<@&9>" in i.response.send_message.call_args.kwargs["content"]  # il faut le rôle
 
         assert await bot.save_section(1, "ximbo", {"role_acces": 0}) == []
+        # Mon rôle a pas tout ce qu'il faut : je dis lesquelles, sans rien créer
+        Me.guild_permissions = discord.Permissions(view_channel=True, send_messages=True, manage_channels=True)
+        i = interaction()
+        await cog.create_room(i)
+        said = i.followup.send.call_args.kwargs["content"]
+        assert "**Gérer les rôles**" in said and "**Intégrer des liens**" in said and "Gérer les salons" not in said
+        assert not guild.create_category.called
+        # Discord refuse quand même (ex. la catégorie l'interdit)
+        Me.guild_permissions = discord.Permissions.all()
+        guild.create_category.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions")
+        i = interaction()
+        await cog.create_room(i)
+        assert "Discord refuse" in i.followup.send.call_args.kwargs["content"]
+        guild.create_category.side_effect = None
+
         i = interaction()
         await cog.create_room(i)
         assert "<#77>" in i.followup.send.call_args.kwargs["content"]

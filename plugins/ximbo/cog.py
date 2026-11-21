@@ -29,7 +29,7 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from .common import COLOR, SOURCE_LABEL, SPOTIFY_URL_RE, URL_RE, channel_name, fmt_ms, progress_bar, reply, search_order
+from .common import COLOR, SOURCE_LABEL, SPOTIFY_URL_RE, URL_RE, channel_name, fmt_ms, missing_permissions, progress_bar, reply, search_order
 from .lavalink import LavalinkManager
 
 log = logging.getLogger("plugin.ximbo")
@@ -813,6 +813,9 @@ class Ximbo(commands.Cog):
         if sum(1 for g in self.rooms.values() if g == guild.id) >= int(cfg.get("max_salons", 25)):
             raise UserError("Le nombre maximum de salons musique est atteint sur ce serveur.")
         category = guild.get_channel(cfg.get("categorie") or 0)
+        if missing := missing_permissions(guild.me.guild_permissions):
+            raise UserError(f"Il me manque des permissions : {missing}. Ajoute-les à mon rôle dans "
+                            "**Paramètres du serveur › Rôles › Ximbo**, puis retape la commande.")
         try:
             if not isinstance(category, discord.CategoryChannel):
                 category = await guild.create_category(
@@ -829,8 +832,11 @@ class Ximbo(commands.Cog):
                 channel_name(member.display_name, member.id), category=category, overwrites=overwrites,
                 topic=f"Bot musique de {member.display_name} : écris un titre ou colle un lien Spotify ici.",
                 reason=f"Salon musique de {member}")
-        except discord.Forbidden:
-            raise UserError("Il me manque des permissions : **Gérer les salons** et **Gérer les rôles**.") from None
+        except discord.Forbidden as e:
+            log.warning("Discord refuse de créer le salon musique sur %s : %s", guild.name, e.text)
+            where = f" (catégorie **{category.name}**)" if isinstance(category, discord.CategoryChannel) else ""
+            raise UserError(f"Discord refuse que je crée le salon musique{where} : vérifie que mon rôle a "
+                            "**Gérer les salons** et **Gérer les rôles**, aussi dans la catégorie.") from None
         welcome = discord.Embed(
             title=f"Bienvenue dans ton bot musique, {member.display_name} !",
             description=("• Va dans un **salon vocal** (ou tape **/ximbo on** dans son clavardage : je te rejoins)\n"

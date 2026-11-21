@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 from tests.ngbot import Member, ng_bot
@@ -56,9 +57,13 @@ class Channel(SimpleNamespace):
         self.get_partial_message = lambda mid: self.partial
 
 
+class Me(str):  # guild.me : sert de clé dans les permissions du salon
+    guild_permissions = discord.Permissions.all()
+
+
 def make_guild(channels):
     room = Channel(77)
-    guild = SimpleNamespace(id=1, default_role="everyone", me="moi", voice_client=None,
+    guild = SimpleNamespace(id=1, default_role="everyone", me=Me("moi"), voice_client=None,
                             get_channel=lambda cid: channels.get(cid),
                             get_member=lambda uid: None,
                             create_category=AsyncMock(return_value=SimpleNamespace(id=66)),
