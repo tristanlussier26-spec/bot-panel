@@ -10,7 +10,7 @@ Un panel web pour héberger des bots Discord, un peu comme Pterodactyl, mais fai
 - **Redémarrage automatique** si le bot plante. S'il plante en boucle, le panel arrête d'essayer et te le dit dans la console.
 - **Constructeur de serveurs Discord** : tu décris les rôles, catégories, salons et permissions dans un modèle, tu vois le plan, puis tu l'appliques avec un de tes bots. Tu peux aussi copier un serveur existant ou importer un modèle discord.new.
 - **Modèle « Bot NG »** : un bot Discord pour un pays NationsGlory, prêt à rouler. Tu mets son jeton, et tu choisis ce qu'il fait avec des plugins.
-- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip : synchro des grades NationsGlory, bienvenue, tickets, niveaux, modération, logs, auto-modération, construction du serveur, salons compteurs, recrutement, rôles à boutons, événements du pays, musique.
+- **Plugins** : des modules à ajouter à un bot en un clic, depuis le catalogue GitHub ou un .zip : synchro des grades NationsGlory, bienvenue, tickets, niveaux, modération, logs, auto-modération, construction du serveur, salons compteurs, recrutement, rôles à boutons, événements du pays, musique, et Ximbo (musique Spotify avec salons de contrôle).
 - **Plusieurs comptes** : connexion avec Discord. L'admin approuve ses amis et fixe leurs limites (nombre de bots, RAM, disque). Chacun voit seulement ses bots.
 
 ## Sécurité : à lire avant d'installer
@@ -221,9 +221,11 @@ Dans **Nouveau bot**, choisis un **modèle** : le panel copie un bot prêt à ro
 
 **Bot NG** : un bot Discord pour un pays NationsGlory. Sans plugin, il fait juste le minimum (`/aide`, `/ping`, `/serveur`…) ; tu choisis le reste dans l'onglet Plugins. Il installe d'office la synchro NationsGlory. Un seul Bot NG peut servir plusieurs pays : coche « Bot partagé » et chaque pays le règle dans « Options du bot ».
 
+**Ximbo** : un bot musique Spotify. Un bouton « Créer mon bot musique » donne à chaque membre son salon de contrôle privé, où il écrit un titre ou colle un lien Spotify. C'est un Bot NG avec le plugin `ximbo` ; Lavalink (Java) s'installe dans le bot au premier démarrage, donc donne-lui **1 Go de RAM**. Voir [templates/ximbo](templates/ximbo/README.md).
+
 Quand le modèle a une nouvelle version, l'onglet **Réglages** du bot montre « Mettre à jour » : ça recopie les fichiers du modèle. Les plugins, leurs réglages, les données et les variables restent.
 
-Un modèle, c'est un dossier de `templates/` avec un `template.json` (`id`, `name`, `version`, `description`, `language`, `main_file`, `plugins`). `TEMPLATES_DIR` change le dossier.
+Un modèle, c'est un dossier de `templates/` avec un `template.json` (`id`, `name`, `version`, `description`, `language`, `main_file`, `plugins`). Facultatif : `base` (les fichiers d'un autre modèle sont copiés d'abord, puis les siens par-dessus) et `ram_mb` (RAM proposée dans « Nouveau bot »). `TEMPLATES_DIR` change le dossier.
 
 ### Plugins
 

@@ -4,6 +4,9 @@ Chaque modèle est un dossier de templates/ avec un template.json :
   {"format": 1, "id": "bot-ng", "name": "Bot NG", "version": "1.0.0", "description": "…",
    "language": "python", "main_file": "bot.py", "plugins": ["nationsglory"]}
 Ses fichiers sont copiés dans le dossier du bot ; les plugins listés sont installés depuis le catalogue.
+Facultatif :
+  "base": "bot-ng"   les fichiers d'un autre modèle sont copiés d'abord, puis ceux-ci par-dessus
+  "ram_mb": 1024     RAM proposée dans « Nouveau bot » (ex. un bot qui fait rouler Java)
 """
 from __future__ import annotations
 
@@ -34,9 +37,14 @@ def _read(folder: Path) -> dict | None:
     if raw.get("language") not in ("python", "node") or not isinstance(raw.get("main_file"), str):
         return None
     plugins = [p for p in raw.get("plugins") or [] if isinstance(p, str)]
+    base = raw.get("base")
+    if base is not None and (not isinstance(base, str) or not ID_RE.match(base) or base == folder.name):
+        return None
+    ram = raw.get("ram_mb")
+    ram = ram if isinstance(ram, int) and 64 <= ram <= 16384 else None
     return {"id": folder.name, "name": str(raw.get("name") or folder.name)[:60], "version": str(raw.get("version") or "")[:20],
             "description": str(raw.get("description") or "")[:500], "language": raw["language"],
-            "main_file": raw["main_file"][:200], "plugins": plugins[:20]}
+            "main_file": raw["main_file"][:200], "plugins": plugins[:20], "base": base, "ram_mb": ram}
 
 
 def list_kits(directory: Path) -> list[dict]:
@@ -53,8 +61,21 @@ def get_kit(directory: Path, kit_id: str) -> dict:
 
 
 def kit_files(directory: Path, kit_id: str) -> dict[str, bytes]:
-    """Les fichiers du modèle (sans template.json, ni données, ni plugins)."""
-    root = directory / kit_id
+    """Les fichiers du modèle (sans template.json, ni données, ni plugins), par-dessus ceux de son modèle de base."""
+    kit = get_kit(directory, kit_id)
+    files: dict[str, bytes] = {}
+    if kit["base"]:
+        base = get_kit(directory, kit["base"])
+        if base["base"]:
+            raise KitError("Un modèle de base peut pas avoir lui-même un modèle de base")
+        files.update(_own_files(directory / base["id"]))
+    files.update(_own_files(directory / kit_id))
+    if len(files) > MAX_FILES:
+        raise KitError("Modèle trop gros")
+    return files
+
+
+def _own_files(root: Path) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root)

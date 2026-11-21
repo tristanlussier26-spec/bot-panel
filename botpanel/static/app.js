@@ -238,7 +238,11 @@ function settingsForm(bot, onSubmit, submitLabel, kits = []) {
     langs.closest(".field").hidden = !!kit;
     mainInput.closest(".field").hidden = !!kit;
     cmdField.hidden = !!kit;
-    fill(kitHint, kit ? [kit.description, kit.plugins.length ? ` Plugins installés d'office : ${kit.plugins.join(", ")}.` : ""] :
+    // RAM conseillée par le modèle (ex. Ximbo fait rouler Java) : on monte la valeur si elle est plus basse
+    const ramInput = form.querySelector("#f-ram");
+    if (kit && kit.ram_mb && ramInput && Number(ramInput.value) < kit.ram_mb) ramInput.value = kit.ram_mb;
+    fill(kitHint, kit ? [kit.description, kit.plugins.length ? ` Plugins installés d'office : ${kit.plugins.join(", ")}.` : "",
+      kit.ram_mb ? ` RAM conseillée : ${kit.ram_mb} Mo.` : ""] :
       "Tu mets tes propres fichiers (ou un petit bot d'exemple est créé).");
   }
   kitSelect.addEventListener("change", applyKit);
