@@ -14,10 +14,13 @@ import asyncio
 import base64
 import logging
 import os
+import platform
 import re
+import shutil
 import struct
 import sys
 import time
+import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +41,14 @@ FORMAT = ("bestaudio[ext=webm][protocol=https]/bestaudio[ext=m4a][protocol=https
 PROBES = {"webm": "matroska/webm", "weba": "matroska/webm", "mka": "matroska/webm", "m4a": "mp4", "mp4": "mp4"}
 STREAM_TTL = 5 * 3600     # une adresse googlevideo expire après ~6 h
 UPDATE_EVERY = 24 * 3600  # YouTube change souvent : un yt-dlp de quelques semaines finit par se faire refuser
+# deno (moteur JavaScript pour les défis de YouTube) : téléchargé sur le disque du bot, pas par pip (le /tmp des bots
+# de Bot Panel fait 64 Mo, et le paquet pip de deno en pèse 42 : l'installation plantait).
+DENO_LATEST = "https://dl.deno.land/release-latest.txt"
+DENO_ZIP = "https://dl.deno.land/release/{tag}/deno-{arch}-unknown-linux-gnu.zip"
+DENO_GITHUB_LATEST = "https://api.github.com/repos/denoland/deno/releases/latest"
+DENO_GITHUB_ZIP = "https://github.com/denoland/deno/releases/download/{tag}/deno-{arch}-unknown-linux-gnu.zip"
+DENO_KNOWN = "v2.9.8"  # si on arrive pas à savoir la dernière version
+DENO_ARCHES = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
 SEARCH_TTL = 24 * 3600
 CACHE_SIZE = 300
 
@@ -118,16 +129,89 @@ def pending_playable(meta: dict, *, port: int, extras: dict | None = None) -> wa
                          source=str(meta.get("origin") or "spotify"), identifier=ident, extras=extras)
 
 
-# ---------------------------------------------------------------- yt-dlp (bloquant : roule dans un thread)
-def prepare_deno() -> None:
-    """yt-dlp a besoin d'un moteur JavaScript (deno, installé par pip) pour YouTube : on l'ajoute au PATH."""
-    try:
-        import deno
-        folder = os.path.dirname(deno.find_deno_bin())
-    except Exception:  # noqa: BLE001  (pas installé : yt-dlp fera sans, moins bien)
-        return
+# ---------------------------------------------------------------- deno et yt-dlp
+def add_to_path(folder: str | Path) -> None:
+    folder = str(folder)
     if folder not in os.environ.get("PATH", "").split(os.pathsep):
         os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
+
+
+def deno_arch(machine: str | None = None) -> str | None:
+    return DENO_ARCHES.get((machine or platform.machine()).lower())
+
+
+def extract_deno(archive: Path, folder: Path) -> Path:
+    """Sort l'exécutable deno de son zip (dans le dossier du bot) et le rend exécutable."""
+    target = folder / "deno"
+    part = folder / "deno.part"
+    with zipfile.ZipFile(archive) as z:
+        name = next((n for n in z.namelist() if n.rsplit("/", 1)[-1] == "deno"), None)
+        if name is None:
+            raise RelayError("archive de deno inattendue")
+        with z.open(name) as src, part.open("wb") as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+    part.chmod(0o755)
+    part.replace(target)
+    return target
+
+
+async def install_deno(folder: Path, http: aiohttp.ClientSession) -> Path | None:
+    """deno dans <données>/deno/ (une seule fois, ~45 Mo). None si ce processeur a pas de deno."""
+    target = folder / "deno"
+    if target.is_file():
+        return target
+    arch = deno_arch()
+    if arch is None:
+        log.warning("Pas de deno pour ce processeur (%s) : yt-dlp fera sans", platform.machine())
+        return None
+    folder.mkdir(parents=True, exist_ok=True)
+    tag = await _deno_latest(http)
+    log.info("Premier démarrage : téléchargement de deno %s pour yt-dlp (une seule fois)", tag)
+    archive = folder / "deno.zip"
+    try:
+        for template in (DENO_ZIP, DENO_GITHUB_ZIP):  # le site de deno, sinon GitHub
+            try:
+                async with http.get(template.format(tag=tag, arch=arch)) as r:
+                    r.raise_for_status()
+                    with archive.open("wb") as f:
+                        async for chunk in r.content.iter_chunked(1 << 16):
+                            f.write(chunk)
+                return await asyncio.to_thread(extract_deno, archive, folder)
+            except (aiohttp.ClientError, TimeoutError, zipfile.BadZipFile) as e:
+                log.warning("Téléchargement de deno raté (%s) : %s", template.split("/")[2], e)
+        raise RelayError("deno introuvable (ni sur dl.deno.land, ni sur GitHub)")
+    finally:
+        archive.unlink(missing_ok=True)
+
+
+async def _deno_latest(http: aiohttp.ClientSession) -> str:
+    try:
+        async with http.get(DENO_LATEST) as r:
+            r.raise_for_status()
+            tag = (await r.text()).strip()
+    except (aiohttp.ClientError, TimeoutError):
+        tag = ""
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        try:
+            async with http.get(DENO_GITHUB_LATEST, headers={"User-Agent": "Ximbo-BotPanel"}) as r:
+                r.raise_for_status()
+                tag = str((await r.json()).get("tag_name") or "")
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            tag = ""
+    return tag if re.fullmatch(r"v\d+\.\d+\.\d+", tag) else DENO_KNOWN
+
+
+def prepare_deno(folder: Path | None = None) -> bool:
+    """Met deno dans le PATH (celui du bot, sinon celui de pip s'il est là) : yt-dlp le trouve tout seul."""
+    if folder is not None and (folder / "deno").is_file():
+        add_to_path(folder)
+        return True
+    try:
+        import deno  # anciennes versions de Ximbo : installé par pip
+        add_to_path(os.path.dirname(deno.find_deno_bin()))
+        return True
+    except Exception:  # noqa: BLE001
+        return shutil.which("deno") is not None
 
 
 def ytdlp_version() -> str | None:
@@ -231,13 +315,17 @@ class YoutubeRelay:
         self._runner: web.AppRunner | None = None
         self._http: aiohttp.ClientSession | None = None
         self._updater: asyncio.Task | None = None
+        self._deno: asyncio.Task | None = None
         self.version = ytdlp_version()
 
     def url_for(self, video_id: str) -> str:
         return f"http://127.0.0.1:{self.port}/yt/{video_id}"
 
+    @property
+    def deno_folder(self) -> Path:
+        return self.cache_dir / "deno"
+
     async def start(self) -> None:
-        prepare_deno()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         app = web.Application()
         app.router.add_get("/yt/{vid}", self._handle)
@@ -252,21 +340,40 @@ class YoutubeRelay:
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=60)
         self._http = aiohttp.ClientSession(timeout=timeout, auto_decompress=False)
         self.running = True
+        if not prepare_deno(self.deno_folder):
+            self._deno = asyncio.create_task(self._install_deno())
         if self.auto_update:
             self._updater = asyncio.create_task(self._keep_fresh())
         log.info("Lecture YouTube par yt-dlp %s : relais prêt sur 127.0.0.1:%d", self.version or "?", self.port)
 
     async def stop(self) -> None:
         self.running = False
-        if self._updater is not None:
-            self._updater.cancel()
-            self._updater = None
+        for task in (self._updater, self._deno):
+            if task is not None:
+                task.cancel()
+        self._updater = self._deno = None
         if self._http is not None:
             await self._http.close()
             self._http = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+
+    async def _install_deno(self) -> None:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600, sock_connect=20)) as http:
+                if await install_deno(self.deno_folder, http):
+                    prepare_deno(self.deno_folder)
+                    log.info("deno prêt : yt-dlp peut répondre aux défis de YouTube")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001  (sans deno, yt-dlp marche quand même, moins bien)
+            log.warning("deno pas installé (%s) : yt-dlp fera sans, certaines vidéos pourraient échouer", e)
+
+    async def _deno_ready(self) -> None:
+        """La première extraction attend deno (téléchargé au démarrage), deux minutes au plus."""
+        if self._deno is not None and not self._deno.done():
+            await asyncio.wait({self._deno}, timeout=120)
 
     async def _keep_fresh(self) -> None:
         """Une fois par jour : la dernière version de yt-dlp (elle sert au prochain redémarrage du bot)."""
@@ -283,10 +390,16 @@ class YoutubeRelay:
             await asyncio.sleep(6 * 3600)
 
     async def update_ytdlp(self) -> str | None:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "pip", "install", "--user", "--disable-pip-version-check", "--no-warn-script-location",
-            "-q", "-U", "yt-dlp[default]", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
-        _, err = await asyncio.wait_for(proc.communicate(), 600)
+        tmp = self.cache_dir / "tmp"  # pas /tmp : 64 Mo seulement dans Bot Panel
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install", "--user", "--disable-pip-version-check", "--no-warn-script-location",
+                "-q", "-U", "yt-dlp[default]", stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, "TMPDIR": str(tmp)})
+            _, err = await asyncio.wait_for(proc.communicate(), 600)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         if proc.returncode:
             log.warning("Mise à jour de yt-dlp ratée : %s", err.decode(errors="replace").strip()[-300:])
             return None
@@ -313,6 +426,7 @@ class YoutubeRelay:
             hit = self._found.get(key)
             if hit and hit[0] > time.time():
                 return hit[1]
+            await self._deno_ready()
             async with self._workers:
                 try:
                     entries = await asyncio.to_thread(_search, query, self.cache_dir)
@@ -335,6 +449,7 @@ class YoutubeRelay:
             if cached and not refresh and cached.expires > time.time():
                 self._streams.move_to_end(video_id)
                 return cached
+            await self._deno_ready()
             async with self._workers:
                 try:
                     info = await asyncio.to_thread(_extract, video_id, self.cache_dir)

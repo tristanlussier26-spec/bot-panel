@@ -46,12 +46,15 @@ def startup_command(bot: dict) -> str:
             "npm install --omit=dev --no-audit --no-fund --loglevel=error || exit 1; fi; "
             f"exec node {main}"
         )
-    # Les dépendances du bot, puis celles de ses plugins (plugins/<id>/requirements.txt)
+    # Les dépendances du bot, puis celles de ses plugins (plugins/<id>/requirements.txt).
+    # pip travaille dans le dossier du bot : /tmp fait 64 Mo (en mémoire), trop peu pour un gros paquet.
     return (
         "for req in requirements.txt plugins/*/requirements.txt; do "
         "if [ -f \"$req\" ]; then echo \"[Panel] Installation des dépendances (pip) : $req\"; "
-        "python3 -m pip install --user --disable-pip-version-check --no-warn-script-location -q -r \"$req\" "
-        "|| exit 1; fi; done; "
+        "mkdir -p \"$HOME/.cache/pip-tmp\"; "
+        "TMPDIR=\"$HOME/.cache/pip-tmp\" python3 -m pip install --user --disable-pip-version-check "
+        "--no-warn-script-location -q -r \"$req\" || exit 1; fi; done; "
+        "rm -rf \"$HOME/.cache/pip-tmp\"; "
         f"exec python3 -u {main}"
     )
 

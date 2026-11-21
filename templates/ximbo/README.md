@@ -46,7 +46,7 @@ Un bot Discord est dans **un seul vocal par serveur** : si quelqu'un écoute dé
 ## Bon à savoir
 
 - Spotify et Deezer diffusent pas l'audio aux bots : Ximbo lit la liste des chansons (pour Spotify, par ses pages publiques, avec spotifyscraper, sans clé d'API ; l'API officielle donne plus les playlists aux nouvelles apps depuis février 2026), puis cherche chaque chanson sur YouTube **au moment de la jouer**, en prenant le résultat qui a la bonne durée. La suivante se prépare pendant que la courante joue.
-- L'audio YouTube vient de **yt-dlp** (avec deno pour les défis JavaScript de YouTube) : YouTube refuse l'audio au plugin youtube-source de Lavalink. Ximbo le relaie à Lavalink par un petit serveur local (`127.0.0.1:2334`, variable `XIMBO_RELAY_PORT`), alors les filtres, le volume et l'avance rapide marchent pareil. Les playlists Spotify doivent être **publiques**.
+- L'audio YouTube vient de **yt-dlp** (avec deno pour les défis JavaScript de YouTube, téléchargé par Ximbo au premier démarrage, ~45 Mo) : YouTube refuse l'audio au plugin youtube-source de Lavalink. Ximbo le relaie à Lavalink par un petit serveur local (`127.0.0.1:2334`, variable `XIMBO_RELAY_PORT`), alors les filtres, le volume et l'avance rapide marchent pareil. Les playlists Spotify doivent être **publiques**.
 - yt-dlp se met à jour tout seul une fois par jour (YouTube change souvent) ; la nouvelle version sert au prochain redémarrage. Si YouTube se met à tout refuser, redémarre le bot.
 - Une chanson introuvable ou illisible est annoncée dans le salon et Ximbo passe à la suivante.
-- Tout ce que Lavalink télécharge est dans `data/plugins/ximbo/lavalink/` (et le cache de yt-dlp dans `data/plugins/ximbo/yt-dlp/`). Efface ces dossiers pour tout réinstaller.
+- Tout ce que Lavalink télécharge est dans `data/plugins/ximbo/lavalink/` (yt-dlp et deno dans `data/plugins/ximbo/yt-dlp/`). Efface ces dossiers pour tout réinstaller.

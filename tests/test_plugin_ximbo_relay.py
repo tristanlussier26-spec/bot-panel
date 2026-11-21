@@ -156,6 +156,49 @@ async def test_prepare_finds_video_and_keeps_metadata(tmp_path):
     assert await rel.prepare(lavasrc_track("soundcloud")) is None
 
 
+async def test_deno_is_downloaded_to_the_bot_disk(tmp_path, monkeypatch):
+    import io
+    import os
+    import zipfile
+
+    real_arch = R.deno_arch
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("deno", b"#!/bin/sh\necho deno 2.9.8\n")
+    asked = []
+
+    async def dl(request):
+        asked.append(request.path)
+        if request.path == "/release-latest.txt":
+            return web.Response(text="v2.9.8\n")
+        if request.path == "/panne":
+            return web.Response(status=503)
+        return web.Response(body=archive.getvalue())
+    app = web.Application()
+    app.router.add_get("/{tail:.*}", dl)
+    async with TestServer(app) as server:
+        monkeypatch.setattr(R, "DENO_LATEST", str(server.make_url("/release-latest.txt")))
+        monkeypatch.setattr(R, "DENO_ZIP", f"http://{server.host}:{server.port}/release/{{tag}}/deno-{{arch}}-unknown-linux-gnu.zip")
+        monkeypatch.setattr(R, "deno_arch", lambda machine=None: "x86_64")
+        async with aiohttp.ClientSession() as http:
+            exe = await R.install_deno(tmp_path / "deno", http)
+            assert exe == tmp_path / "deno" / "deno" and os.access(exe, os.X_OK)
+            assert asked == ["/release-latest.txt", "/release/v2.9.8/deno-x86_64-unknown-linux-gnu.zip"]
+            assert await R.install_deno(tmp_path / "deno", http) == exe and len(asked) == 2  # une seule fois
+            # le site de deno répond pas : la version connue, depuis GitHub
+            exe.unlink()
+            monkeypatch.setattr(R, "DENO_LATEST", str(server.make_url("/panne")))
+            monkeypatch.setattr(R, "DENO_GITHUB_LATEST", str(server.make_url("/panne")))
+            monkeypatch.setattr(R, "DENO_ZIP", str(server.make_url("/panne")))
+            monkeypatch.setattr(R, "DENO_GITHUB_ZIP", f"http://{server.host}:{server.port}/gh/{{tag}}/{{arch}}.zip")
+            assert await R.install_deno(tmp_path / "deno", http) == exe
+            assert asked[-1] == f"/gh/{R.DENO_KNOWN}/x86_64.zip"
+    assert not (tmp_path / "deno" / "deno.zip").exists()
+    monkeypatch.setenv("PATH", "/usr/bin")
+    assert R.prepare_deno(tmp_path / "deno") and os.environ["PATH"].startswith(str(tmp_path / "deno"))
+    assert real_arch("AMD64") == "x86_64" and real_arch("arm64") == "aarch64" and real_arch("riscv64") is None
+
+
 async def test_ytdlp_updates_itself_once_a_day(tmp_path, monkeypatch):
     rel = R.YoutubeRelay(tmp_path, port=0)
     rel.version = "2026.01.01"
@@ -169,11 +212,13 @@ async def test_ytdlp_updates_itself_once_a_day(tmp_path, monkeypatch):
 
     async def fake_exec(*args, **kwargs):
         commands.append(args)
+        assert kwargs["env"]["TMPDIR"] == str(tmp_path / "tmp") and (tmp_path / "tmp").is_dir()
         return Proc()
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(R, "ytdlp_version", lambda: "2026.11.20")
     assert await rel.update_ytdlp() == "2026.11.20"
     assert commands[0][1:3] == ("-m", "pip") and "-U" in commands[0] and commands[0][-1] == "yt-dlp[default]"
+    assert not (tmp_path / "tmp").exists()  # pip a travaillé sur le disque du bot, pas dans le petit /tmp
 
 
 async def test_relay_serves_ranges_and_renews_expired_urls(tmp_path):
