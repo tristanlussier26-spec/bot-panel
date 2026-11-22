@@ -33,6 +33,7 @@ from .api import NationsGlory, RateLimiter, normalize_target
 from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, make_embed, reply, truncate
 from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
 from .store import Store
+from .veille_run import FORUM_EVERY, MARKET_EVERY, VeilleMixin
 
 log = logging.getLogger("plugin.nationsglory")
 
@@ -164,6 +165,22 @@ class GuildNG:
         self.warzone_channel_id = chan("salon_warzone_id")
         self.warzone_weekly = bool(cfg.get("warzone_semaine", True))
         self.track_activity = bool(cfg.get("suivre_activite", True))
+        # Veille (page « NationsGlory : rapports et veille »)
+        self.report_channel_id = chan("salon_rapport_id")
+        self.report_hour = min(23, max(0, int(cfg.get("heure_rapport", 22) or 0)))
+        self.tz = str(cfg.get("fuseau") or "America/Toronto")
+        self.diplomacy_alert = bool(cfg.get("alerte_diplomatie", True))
+        self.watchlist = [str(x).strip() for x in cfg.get("pays_surveilles") or [] if str(x).strip()][:25]
+        self.forum_channel_id = chan("salon_forum_id")
+        self.forum_category = str(cfg.get("categorie_forum") or "annonces").strip()
+        self.market_channel_id = chan("salon_marche_id")
+        self.market_pct = max(1, int(cfg.get("seuil_marche", 10) or 10))
+        self.ingame_role_id = chan("role_en_jeu_id")
+        self.inactive_role_id = chan("role_inactif_id")
+        self.inactive_days = max(1, int(cfg.get("jours_inactif", 14) or 14))
+        self.last_report_day: str | None = None
+        self.last_forum = -1e9
+        self.last_market = -1e9
         self.last_alerts = -1e9
         self.last_warzone = -1e9
         self.last_sync = -1e9
@@ -190,7 +207,7 @@ class GuildNG:
         return await self.api.members(await self.country(), max_age=max_age)
 
 
-class NGSync(commands.Cog):
+class NGSync(VeilleMixin, commands.Cog):
     synchro = app_commands.Group(
         name="synchro",
         description="Gestion des comptes liés et de la synchro des grades NationsGlory",
@@ -302,9 +319,16 @@ class NGSync(commands.Cog):
         if not server or not country:
             errors.append("NationsGlory : remplis le serveur et le pays")
         try:
-            parse_settings(ng)
+            settings, _ = parse_settings(ng)
         except ConfigError as e:
             errors.append(f"NationsGlory : {e}")
+        else:
+            for key, label in (("role_en_jeu_id", "« connecté en jeu »"), ("role_inactif_id", "« inactif »")):
+                role_id = int(ng.get(key, 0) or 0)
+                if role_id and role_id in settings.managed_roles:
+                    errors.append(f"NationsGlory : le rôle {label} est déjà utilisé pour un grade ou le pays")
+            if int(ng.get("role_en_jeu_id", 0) or 0) and ng.get("role_en_jeu_id") == ng.get("role_inactif_id"):
+                errors.append("NationsGlory : les rôles « connecté en jeu » et « inactif » doivent être différents")
         return errors
 
     async def before_panel_save(self, guild: discord.Guild, section: str, values: dict) -> None:
@@ -423,12 +447,16 @@ class NGSync(commands.Cog):
     async def run_sync(self, guild: discord.Guild, st: GuildNG) -> None:
         members = await st.members(max_age=0)
         self.bot.dispatch("ng_country_update", guild.id, st.country_name, members)  # ex. le plugin Salons compteurs
+        online_now: set[str] | None = None
         try:
-            online = insights.online_members(members, await st.api.online())
+            online_now = await st.api.online()
+            online = insights.online_members(members, online_now)
             self.bot.dispatch("ng_online_update", guild.id, st.country_name, len(online))
+            await self.record_online_peak(guild.id, st, len(online))
         except ServiceError as e:
             if st.should_warn(f"enligne:{e}"):
                 log.info("%s : joueurs en ligne pas lus (%s)", guild.name, e)
+        await self.sync_special_roles(guild, st, members, online_now)
         if st.announce_channel_id:
             await self.announce_country_changes(guild, st, members)
         checked, changed, errors = await self.sync_all(guild, st, members)
@@ -454,29 +482,45 @@ class NGSync(commands.Cog):
             st = self.state(guild.id)
             if st is None or now < st.paused_until:
                 continue
-            try:
-                if now - st.last_sync >= st.interval * 60:
-                    st.last_sync = now
-                    await self.run_sync(guild, st)
-                if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
-                    st.last_status = now
-                    await self.run_status(guild, st)
-                if st.war_channel_id and now - st.last_alerts >= ALERTS_EVERY:
-                    st.last_alerts = now
-                    await self.run_alerts(guild, st)
-                if st.warzone_channel_id and now - st.last_warzone >= WARZONE_EVERY:
-                    st.last_warzone = now
-                    await self.run_warzone(guild, st)
-                if st.track_activity:
-                    await self.check_activity(st)
-            except ServiceError as e:
-                self.set_status(guild.id, self.status_for_error(e))
-                if getattr(e, "status", None) in (401, 403) or not self.api_key():
-                    st.paused_until = now + KEY_PAUSE  # rien à faire tant que la clé est pas réglée
-                if st.should_warn(str(e)):
-                    log.warning("%s : synchro NG impossible (%s)", guild.name, e)
-            except Exception:
-                log.exception("Erreur inattendue dans la synchro NG de %s", guild.name)
+            steps = []
+            if now - st.last_sync >= st.interval * 60:
+                st.last_sync = now
+                steps.append(("synchro", self.run_sync))
+            if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
+                st.last_status = now
+                steps.append(("stats", self.run_status))
+            if st.war_channel_id and now - st.last_alerts >= ALERTS_EVERY:
+                st.last_alerts = now
+                steps.append(("alertes", self.run_alerts))
+            if st.warzone_channel_id and now - st.last_warzone >= WARZONE_EVERY:
+                st.last_warzone = now
+                steps.append(("warzone", self.run_warzone))
+            if st.report_channel_id and self.report_due(st):
+                steps.append(("rapport", self.run_report))
+            if st.forum_channel_id and now - st.last_forum >= FORUM_EVERY:
+                st.last_forum = now
+                steps.append(("forum", self.run_forum))
+            if st.market_channel_id and now - st.last_market >= MARKET_EVERY:
+                st.last_market = now
+                steps.append(("marché", self.run_market))
+            if st.track_activity:
+                steps.append(("activité", lambda g, s: self.check_activity(s)))
+            for name, step in steps:  # une étape qui plante empêche pas les autres
+                if time.monotonic() < st.paused_until:
+                    break
+                try:
+                    await step(guild, st)
+                except ServiceError as e:
+                    self.set_status(guild.id, self.status_for_error(e))
+                    if getattr(e, "status", None) in (401, 403) or not self.api_key():
+                        st.paused_until = time.monotonic() + KEY_PAUSE  # rien à faire tant que la clé est pas réglée
+                    if st.should_warn(str(e)):
+                        log.warning("%s : NationsGlory (%s) impossible (%s)", guild.name, name, e)
+                except discord.HTTPException as e:
+                    if st.should_warn(f"{name}:{e}"):
+                        log.warning("%s : Discord a refusé (%s : %s)", guild.name, name, e)
+                except Exception:
+                    log.exception("Erreur inattendue (%s) dans NationsGlory pour %s", name, guild.name)
 
     @tick.before_loop
     async def _before_tick(self) -> None:
@@ -663,6 +707,10 @@ class NGSync(commands.Cog):
             lines += enemy_lines
             important |= bool(enemy_lines)
             await self._save(key, sorted(now_attackable))
+        if st.diplomacy_alert or st.watchlist:
+            more, grave = await self.diplomacy_and_watch(guild, st, card)
+            lines += more
+            important |= grave
         return lines, important
 
     async def run_alerts(self, guild: discord.Guild, st: GuildNG) -> list[str]:
@@ -1142,41 +1190,6 @@ class NGSync(commands.Cog):
         if missing:
             footer += f" · les {missing} autres le seront dans les prochaines minutes"
         embed.set_footer(text=footer + " · dernière connexion publiée par NationsGlory (au jour près)")
-        await reply(interaction, embed=embed)
-
-    @app_commands.command(name="joueur", description="Pays et grade d'un joueur NationsGlory")
-    @app_commands.describe(pseudo="Le pseudo NationsGlory")
-    @app_commands.guild_only()
-    async def joueur(self, interaction: discord.Interaction, pseudo: Pseudo) -> None:
-        st = await self._st(interaction)
-        if st is None:
-            return
-        pseudo = pseudo.strip()
-        if not NAME_RE.match(pseudo):
-            return await reply(interaction, "Pseudo invalide.")
-        await interaction.response.defer(ephemeral=True)
-        data = await st.api.get_player(pseudo)
-        if data is None:
-            return await reply(interaction, f"Je trouve pas **{pseudo}** sur le serveur {st.api.server}.")
-        name = data.get("username") or pseudo
-        cid = data.get("country_id")
-        country = data.get("country_name") or data.get("country")
-        if not country and cid:
-            if cid == st.country_id:
-                country = st.country_name
-            else:
-                names = {c.get("country_id"): c.get("name") for c in await st.api.countries()}
-                country = names.get(cid) or "Pays inconnu"
-        embed = discord.Embed(title=f"🎮 {name}", color=BLUE)
-        embed.set_thumbnail(url=head_url(name))
-        embed.add_field(name="Pays", value=str(country) if country else "Aucun")
-        if country:
-            embed.add_field(name="Grade", value=rank_label(data.get("role")))
-        if data.get("online") is not None:
-            embed.add_field(name="Statut", value="🟢 En ligne" if data["online"] else "⚫ Hors ligne")
-        if link := await self.store.get_link_by_name(interaction.guild.id, name):
-            embed.add_field(name="Discord", value=f"<@{link['discord_id']}>")
-        embed.set_footer(text=f"Serveur {st.api.server}")
         await reply(interaction, embed=embed)
 
     @app_commands.command(name="guerres", description="Les guerres du pays : en cours, en négociation et récentes")

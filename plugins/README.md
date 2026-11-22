@@ -4,7 +4,7 @@ Les plugins qu'on installe depuis l'onglet **Plugins** d'un bot (fait avec le mo
 
 | Plugin | Ce qu'il fait | Intents à activer |
 |---|---|---|
-| [`nationsglory`](nationsglory/) | Grades d'un pays NationsGlory ↔ rôles Discord, `/lier` avec validation, annonces du pays, salon de stats, `/guerres`, `/guerre`, `/classement-pays`, `/enligne`, `/inactifs`, `/alliance`, alertes de guerre et de power, warzone du jour et de la semaine. Une seule clé de l'API officielle (variable `NG_API_KEY`) pour tous les serveurs. | Server Members |
+| [`nationsglory`](nationsglory/) | Grades d'un pays NationsGlory ↔ rôles Discord, `/lier` avec validation, annonces du pays, salon de stats. Alertes de guerre, de power et de diplomatie, pays surveillés, rapport du jour, warzone du jour et de la semaine, annonces officielles du forum, marché des céréales, rôles « en jeu » et « inactif ». Commandes : `/pays`, `/guerres`, `/guerre`, `/classement-pays`, `/historique`, `/comparer`, `/enligne`, `/inactifs`, `/alliance`, `/joueur`, `/warzone`, `/competences`, `/marche`, `/hdv`, `/loteries`, `/entreprises`, `/statut-ng`, `/rapport`. Une seule clé de l'API officielle (variable `NG_API_KEY`) pour tous les serveurs. | Server Members |
 | [`bienvenue`](bienvenue/) | Bienvenue et départ, MP de bienvenue, rôle d'arrivée retiré par un bouton ou par la liaison NationsGlory. | Server Members |
 | [`tickets`](tickets/) | Panneau de tickets, salon privé avec le staff, transcription à la fermeture. | Server Members |
 | [`niveaux`](niveaux/) | XP en écrivant, rôles en récompense, `/rang`, `/classement`. | — |

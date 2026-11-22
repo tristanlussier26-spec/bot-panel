@@ -374,3 +374,137 @@ class NationsGlory:
                 self._images.pop(next(iter(self._images)))
             self._images[sha] = data
         return self._images[sha]
+
+    # ---- Séries historiques (graphiques) ------------------------------------------------------
+    async def series(self, metric: str, subject: str | None, range_: str, *, max_age: float = 600) -> list[dict]:
+        """Points {at, value, min, max} d'une métrique (ex. country.power sur 7d). [] si rien de publié."""
+        params = {"range": range_}
+        if subject:
+            params["subject"] = subject
+
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/series/{metric}", params))
+            points = data.get("points") if isinstance(data, dict) else None
+            return [p for p in points or [] if isinstance(p, dict)]
+        return await self._shared(f"series:{metric}:{subject}:{range_}", max_age, fetch)
+
+    # ---- Économie -------------------------------------------------------------------------------
+    async def market(self, *, max_age: float = 240) -> list[dict]:
+        """Céréales et leur prix actuel (domaine market, aux 5 min)."""
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/market") or []
+        return await self._shared("market", max_age, fetch)
+
+    async def market_history(self, cereal: str, *, days: int = 30, max_age: float = 1800) -> dict | None:
+        """Une céréale avec son historique quotidien (history.price, sales, stocks)."""
+        if not re.fullmatch(r"[a-z_]{2,64}", cereal or ""):
+            return None
+
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/market/{cereal}", {"history_days": max(1, min(90, days))}))
+            return data if isinstance(data, dict) else None
+        return await self._shared(f"market:{cereal}:{days}", max_age, fetch)
+
+    async def hdv_search(self, query: str, *, limit: int = 10, max_age: float = 300) -> list[dict]:
+        """Objets de l'hôtel des ventes dont le nom contient `query` (sans tenir compte des accents)."""
+        q = str(query or "").strip()[:64]
+        if not q:
+            return []
+
+        async def fetch():
+            data = await self._get(f"/servers/{self.server}/hdv/items", {"q": q, "limit": max(1, min(limit, 25))})
+            rows, _ = extract_page(data)
+            return rows
+        return await self._shared(f"hdv:q:{q.lower()}:{limit}", max_age, fetch)
+
+    async def hdv_item(self, item: str, *, max_age: float = 300) -> dict | None:
+        if not re.fullmatch(r"\d{1,5}:\d{1,5}", item or ""):
+            return None
+
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/hdv/items/{item}"))
+            return data if isinstance(data, dict) else None
+        return await self._shared(f"hdv:item:{item}", max_age, fetch)
+
+    async def lotteries(self, *, max_age: float = 300) -> list[dict]:
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/lotteries") or []
+        return await self._shared("lotteries", max_age, fetch)
+
+    async def enterprises(self, *, max_age: float = 600) -> list[dict]:
+        """Toutes les entreprises du serveur (domaine enterprise, aux 10 min)."""
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/enterprises") or []
+        return await self._shared("enterprises", max_age, fetch)
+
+    # ---- Classements --------------------------------------------------------------------------
+    async def warzone_live(self, *, max_age: float = 600) -> list[dict]:
+        """Warzone de la journée en cours (domaine warzone_live, aux 15 min)."""
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/rankings/warzone/live") or []
+        return await self._shared("warzone_live", max_age, fetch)
+
+    async def skills(self, period: str = "live", *, max_age: float = 1800) -> list[dict]:
+        """Top 50 de chaque compétence : « live » (semaine en cours) ou « weekly » (dernière semaine close)."""
+        if period not in ("live", "weekly"):
+            raise ValueError(period)
+
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/rankings/skills/{period}") or []
+        return await self._shared(f"skills:{period}", max_age, fetch)
+
+    # ---- Guerres de tout le serveur (pour les pays surveillés) ----------------------------------
+    async def server_wars(self, *, max_age: float = 300) -> list[dict]:
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/wars") or []
+        return await self._shared("wars:all", max_age, fetch)
+
+    # ---- Joueurs ------------------------------------------------------------------------------
+    async def profile(self, username: str, *, max_age: float = 300) -> dict | None:
+        """Fiche publique d'un joueur (tous serveurs). {"private": True} si son profil est privé."""
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,32}", username or ""):
+            return None
+
+        async def fetch():
+            try:
+                data = unwrap(await self._get(f"/players/{username}"))
+            except NationsGloryError as e:
+                if e.status == 403 and "profile_private" in str(e):
+                    return {"private": True, "username": username}
+                raise
+            return data if isinstance(data, dict) else None
+        return await self._shared(f"profile:{username.lower()}", max_age, fetch)
+
+    async def status(self, *, max_age: float = 120) -> list[dict]:
+        """État et fraîcheur de chaque domaine du serveur NG."""
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/status"))
+            domains = data.get("domains") if isinstance(data, dict) else None
+            return [d for d in domains or [] if isinstance(d, dict)]
+        return await self._shared("status", max_age, fetch)
+
+    # ---- Forum (annonces officielles) -----------------------------------------------------------
+    async def forum_category_id(self, value: str) -> int | None:
+        """Identifiant d'une catégorie du forum à partir de son numéro, de son slug ou de son nom."""
+        value = str(value or "").strip()
+        if value.isdigit():
+            return int(value)
+        if match := re.search(r"/forum/category/([^/?#]+)", value):
+            value = unquote(match.group(1))
+
+        async def fetch():
+            rows, _ = extract_page(await self._get("/forum/categories"))
+            return rows
+        rows = await self._shared("forum:categories", 3600, fetch)
+        wanted = value.lower()
+        for row in rows:
+            if wanted in (str(row.get("slug") or "").lower(), str(row.get("name") or "").lower()):
+                return int(row["id"]) if str(row.get("id") or "").isdigit() else None
+        return None
+
+    async def forum_threads(self, category: int, *, limit: int = 10, max_age: float = 240) -> list[dict]:
+        async def fetch():
+            data = unwrap(await self._get(f"/forum/categories/{int(category)}/threads", {"limit": max(1, min(limit, 50))}))
+            threads = (data.get("threads") or data.get("data")) if isinstance(data, dict) else data
+            return [t for t in threads or [] if isinstance(t, dict)]
+        return await self._shared(f"forum:{int(category)}:{limit}", max_age, fetch)

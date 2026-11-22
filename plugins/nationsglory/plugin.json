@@ -3,7 +3,7 @@
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
   "version": "1.3.0",
-  "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation, annonces, salon de stats, alertes de guerre et de power, warzone, classements, membres en ligne et inactifs. Utilise l'API officielle : une seule clé pour tous les serveurs.",
+  "description": "Tout NationsGlory dans Discord : grades ↔ rôles, /lier, alertes de guerre, de power et de diplomatie, pays surveillés, rapport du jour, warzone, annonces officielles, marché, HDV, classements, historique, en ligne et inactifs. Une seule clé de l'API officielle pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",
   "enabled_by": "ng.active",
@@ -244,6 +244,114 @@
           "type": "bool",
           "default": true,
           "help": "Le bot relit doucement la dernière connexion de chaque membre (environ 2 requêtes par minute)."
+        }
+      ]
+    },
+    {
+      "id": "ng_veille",
+      "section": "ng",
+      "title": "NationsGlory : rapports et veille",
+      "icon": "🛰️",
+      "description": "Rapport du jour, diplomatie, pays à surveiller, annonces officielles, marché et rôles automatiques.",
+      "fields": [
+        {
+          "key": "salon_rapport_id",
+          "label": "Salon du rapport du jour",
+          "type": "channel",
+          "default": 0,
+          "help": "Chaque jour : membres, power, claims, banque, score et MMR avec leur variation, rangs sur le serveur, arrivées et départs, guerres, warzone, pic en ligne, inactifs."
+        },
+        {
+          "key": "heure_rapport",
+          "label": "Heure du rapport",
+          "type": "int",
+          "default": 22,
+          "min": 0,
+          "max": 23
+        },
+        {
+          "key": "fuseau",
+          "label": "Fuseau horaire du rapport",
+          "type": "select",
+          "default": "America/Toronto",
+          "choices": [
+            [
+              "America/Toronto",
+              "Québec / Montréal"
+            ],
+            [
+              "Europe/Paris",
+              "France / Belgique / Suisse"
+            ],
+            [
+              "UTC",
+              "UTC"
+            ]
+          ]
+        },
+        {
+          "key": "alerte_diplomatie",
+          "label": "Alertes de diplomatie",
+          "type": "bool",
+          "default": true,
+          "help": "Dans le salon des guerres : nouvel allié ou ennemi, fin d'alliance, colonie, colonisation, changement d'alliance."
+        },
+        {
+          "key": "pays_surveilles",
+          "label": "Pays à surveiller (un par ligne)",
+          "type": "lines",
+          "default": [],
+          "help": "Dans le salon des guerres : quand un de ces pays passe sous le power, déclare une guerre ou se fait attaquer. 25 au plus."
+        },
+        {
+          "key": "salon_forum_id",
+          "label": "Salon des annonces officielles NationsGlory",
+          "type": "channel",
+          "default": 0,
+          "help": "Les nouveaux sujets d'une catégorie du forum NationsGlory."
+        },
+        {
+          "key": "categorie_forum",
+          "label": "Catégorie du forum",
+          "type": "text",
+          "default": "annonces",
+          "help": "Le nom, le slug ou l'adresse de la catégorie (ex. annonces)."
+        },
+        {
+          "key": "salon_marche_id",
+          "label": "Salon des alertes du marché des céréales",
+          "type": "channel",
+          "default": 0
+        },
+        {
+          "key": "seuil_marche",
+          "label": "Variation du prix pour une alerte (%)",
+          "type": "int",
+          "default": 10,
+          "min": 1,
+          "max": 500
+        },
+        {
+          "key": "role_en_jeu_id",
+          "label": "Rôle « connecté en jeu »",
+          "type": "role",
+          "default": 0,
+          "help": "Donné aux comptes liés quand ils sont connectés sur NationsGlory, retiré quand ils partent (aux X minutes de la synchro)."
+        },
+        {
+          "key": "role_inactif_id",
+          "label": "Rôle « inactif »",
+          "type": "role",
+          "default": 0,
+          "help": "Donné aux membres du pays liés qui se sont pas connectés depuis le nombre de jours ci-dessous. Demande le suivi d'activité."
+        },
+        {
+          "key": "jours_inactif",
+          "label": "Inactif après X jours",
+          "type": "int",
+          "default": 14,
+          "min": 1,
+          "max": 90
         }
       ]
     }
