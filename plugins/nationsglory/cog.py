@@ -14,6 +14,7 @@ Liaison des comptes :
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -27,6 +28,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from . import alerts
 from .api import NationsGlory, RateLimiter, normalize_target
 from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, make_embed, reply, truncate
 from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
@@ -57,7 +59,10 @@ def fmt_int(value) -> str:
 
 
 COUNTRY_STATS = (("power", "⚡ Power"), ("power_max", "Power max"), ("claims", "🗺️ Claims"),
-                 ("bank", "💰 Trésorerie"), ("mmr", "🏅 MMR"), ("level", "Niveau"))
+                 ("bank_balance", "💰 Trésorerie"), ("score", "🏆 Score"), ("mmr", "🏅 MMR"), ("level", "Niveau"))
+ALERTS_EVERY = 5 * 60  # pays aux 5 min ; les guerres sont mises à jour aux 10 min chez NationsGlory
+WARZONE_EVERY = 15 * 60
+ORANGE = 0xE67E22
 
 
 def build_stats_embed(server: str, country: str, card: dict, members: dict[str, dict]) -> discord.Embed:
@@ -75,7 +80,7 @@ def build_stats_embed(server: str, country: str, card: dict, members: dict[str, 
         value = card.get(key)
         if isinstance(value, (int, float, str)) and not isinstance(value, bool):
             text = fmt_int(value) if isinstance(value, int) else str(value)
-            stats.append(f"{label} : {text}{' $' if key == 'bank' else ''}")
+            stats.append(f"{label} : {text}{' $' if key == 'bank_balance' else ''}")
     if stats:
         embed.add_field(name="Pays", value="\n".join(stats), inline=True)
     embed.set_footer(text="Données de l'API NationsGlory, mises à jour aux 5 minutes")
@@ -137,6 +142,16 @@ class GuildNG:
         self.announce = {
             k: bool(cfg.get(f"annoncer_{k}", d)) for k, d in (("arrivees", True), ("promotions", True), ("departs", False))
         }
+        # Guerres et alertes (page « NationsGlory : guerres et alertes »)
+        self.war_channel_id = chan("salon_guerres_id")
+        self.alert_role_id = chan("role_alerte_id")
+        self.announce_assaults = bool(cfg.get("annoncer_assauts", True))
+        self.power_alert = bool(cfg.get("alerte_power", True))
+        self.power_margin = max(0, int(cfg.get("marge_power", 50) or 0))
+        self.enemy_alert = bool(cfg.get("alerte_ennemis", True))
+        self.warzone_channel_id = chan("salon_warzone_id")
+        self.last_alerts = -1e9
+        self.last_warzone = -1e9
         self.last_sync = -1e9
         self.last_status = -1e9
         self.paused_until = 0.0
@@ -425,6 +440,12 @@ class NGSync(commands.Cog):
                 if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
                     st.last_status = now
                     await self.run_status(guild, st)
+                if st.war_channel_id and now - st.last_alerts >= ALERTS_EVERY:
+                    st.last_alerts = now
+                    await self.run_alerts(guild, st)
+                if st.warzone_channel_id and now - st.last_warzone >= WARZONE_EVERY:
+                    st.last_warzone = now
+                    await self.run_warzone(guild, st)
             except ServiceError as e:
                 self.set_status(guild.id, self.status_for_error(e))
                 if getattr(e, "status", None) in (401, 403) or not self.api_key():
@@ -543,6 +564,113 @@ class NGSync(commands.Cog):
         card = await st.api.get_country(cid) or {}
         embed = build_stats_embed(st.api.server, st.country_name, card, members)
         await self._edit_or_send(channel, f"stats_message:{channel.id}", embed=embed)
+
+    # ---- Guerres, power et warzone ------------------------------------------------------------
+    async def _load(self, key: str):
+        raw = await self.store.get_value(key)
+        return json.loads(raw) if raw else None
+
+    async def _save(self, key: str, value) -> None:
+        await self.store.set_value(key, json.dumps(value))
+
+    async def collect_alerts(self, guild: discord.Guild, st: GuildNG) -> tuple[list[str], bool]:
+        """Compare l'état du pays au tour d'avant. Retourne (lignes à publier, mentionner le rôle?)."""
+        cid = await st.country()
+        lines: list[str] = []
+        important = False
+
+        # Guerres du pays : déclarations, débuts, fins, assauts
+        wars = await st.api.wars(cid)
+        key = f"ng_guerres:{guild.id}"
+        saved = await self._load(key)
+        previous = saved.get("statuts") if isinstance(saved, dict) else None
+        seen_assaults: dict = (saved or {}).get("assauts", {}) if isinstance(saved, dict) else {}
+        for event in alerts.war_events(previous, wars, cid):
+            lines.append(alerts.war_line(event, cid))
+            important |= event.important
+        new_assaults: dict[str, int] = {}
+        if st.announce_assaults:
+            for w in wars:
+                if w.get("status") != "in_progress":
+                    continue
+                wid = str(w["war_id"])
+                detail = await st.api.war(int(wid))
+                if detail is None:
+                    continue
+                known = seen_assaults.get(wid)
+                if known is None and previous is not None and previous.get(wid) in (None, "negotiation"):
+                    known = 0  # guerre qui vient de commencer : tous ses assauts sont nouveaux
+                # sinon (premier tour, option qu'on vient d'activer) : on prend note sans annoncer
+                events, new_assaults[wid] = alerts.assault_events(detail, known, cid)
+                lines += [alerts.war_line(e, cid) for e in events]
+        await self._save(key, {"statuts": alerts.war_snapshot(wars), "assauts": new_assaults})
+
+        # Power du pays et ennemis attaquables
+        card = await st.api.get_country(cid) or {}
+        if st.power_alert:
+            key = f"ng_power:{guild.id}"
+            previous_level = await self.store.get_value(key)
+            level = alerts.power_level(card, st.power_margin)
+            message, mention = alerts.power_alert(previous_level, level, card, st.country_name)
+            if message:
+                lines.append(message)
+                important |= mention
+            if level:
+                await self.store.set_value(key, level)
+        if st.enemy_alert:
+            enemies = [e for e in ((card.get("relations") or {}).get("enemies") or []) if isinstance(e, str)]
+            key = f"ng_ennemis:{guild.id}"
+            previous_ids = await self._load(key)
+            now_attackable = alerts.attackable_enemies(enemies, await st.api.countries(max_age=300)) if enemies else {}
+            enemy_lines = alerts.enemy_lines(previous_ids, now_attackable)
+            lines += enemy_lines
+            important |= bool(enemy_lines)
+            await self._save(key, sorted(now_attackable))
+        return lines, important
+
+    async def run_alerts(self, guild: discord.Guild, st: GuildNG) -> list[str]:
+        lines, important = await self.collect_alerts(guild, st)
+        if not lines:
+            return []
+        channel = self._channel(guild, st.war_channel_id, st, "guerres et alertes")
+        if channel is None:
+            return lines
+        if len(lines) > 15:
+            lines = lines[:15] + [f"… et {len(lines) - 15} autres."]
+        text = "\n".join(lines)
+        roles = []
+        if important and st.alert_role_id:
+            text = f"<@&{st.alert_role_id}>\n{text}"
+            roles = [discord.Object(st.alert_role_id)]
+        await channel.send(truncate(text, 2000), allowed_mentions=discord.AllowedMentions(roles=roles, users=False, everyone=False))
+        return lines
+
+    async def run_warzone(self, guild: discord.Guild, st: GuildNG) -> bool:
+        """Publie le classement warzone du jour quand une nouvelle journée est close (20 h, heure de Paris)."""
+        cid = await st.country()
+        try:
+            rows = await st.api.warzone_daily()
+        except NationsGloryError as e:
+            if e.status == 503:
+                return False  # pas encore de journée close publiée sur ce serveur
+            raise
+        day, top, ours = alerts.warzone_summary(rows, cid)
+        key = f"ng_warzone:{guild.id}"
+        if not day or await self.store.get_value(key) == day:
+            return False
+        channel = self._channel(guild, st.warzone_channel_id, st, "classement warzone")
+        if channel is None:
+            return False
+        embed = discord.Embed(title=f"🏁 Warzone du {day} · {st.api.server.capitalize()}", color=ORANGE,
+                              description="\n".join(top))
+        if ours:
+            embed.add_field(name=st.country_name, value=ours, inline=False)
+        elif not any(r.get("country_id") == cid for r in rows):
+            embed.add_field(name=st.country_name, value="Pas classé aujourd'hui.", inline=False)
+        embed.set_footer(text="Journée close à 20 h (heure de Paris) · API NationsGlory")
+        await channel.send(embed=embed)
+        await self.store.set_value(key, day)
+        return True
 
     # ---- Validation des liaisons ----------------------------------------------------------
     @staticmethod
@@ -708,6 +836,7 @@ class NGSync(commands.Cog):
         country_id = await st.country()
         members = await st.members()
         country = await st.api.get_country(country_id) or {}
+        names = {c.get("country_id"): c.get("name") for c in await st.api.countries()}
 
         by_rank: dict[str, list[str]] = {r: [] for r in RANKS}
         others: list[str] = []
@@ -721,15 +850,29 @@ class NGSync(commands.Cog):
         )
         fields = (
             ("power", "Power"), ("power_max", "Power max"), ("claims", "Claims"),
-            ("bank", "Trésorerie"), ("mmr", "MMR"), ("level", "Niveau"),
+            ("bank_balance", "Trésorerie"), ("score", "Score"), ("mmr", "MMR"), ("level", "Niveau"),
         )
         for key, label in fields:
             value = country.get(key)
             if isinstance(value, (int, float, str)) and not isinstance(value, bool):
                 text = fmt_int(value) if isinstance(value, int) else str(value)
-                embed.add_field(name=label, value=f"{text} $" if key == "bank" else text)
-        if isinstance(flag := country.get("flag"), str) and flag.startswith("/"):
-            embed.set_thumbnail(url=f"https://nationsglory.fr{flag}")
+                embed.add_field(name=label, value=f"{text} $" if key == "bank_balance" else text)
+        level = alerts.power_level(country, 0)
+        if level == alerts.POWER_UNDER:
+            embed.add_field(name="⚠️ Attention", value="Sous le power : le pays est attaquable!", inline=False)
+        relations = country.get("relations") or {}
+        for key, label in (("allies", "🤝 Alliés"), ("enemies", "⚔️ Ennemis")):
+            ids = [i for i in relations.get(key) or [] if isinstance(i, str)]
+            if ids:
+                listed = sorted((names.get(i) or "?" for i in ids), key=str.lower)
+                embed.add_field(name=f"{label} ({len(ids)})", value=truncate(", ".join(listed)), inline=False)
+        files = []
+        try:
+            if png := await st.api.image(country.get("flag_sha256")):
+                files.append(discord.File(io.BytesIO(png), filename="drapeau.png"))
+                embed.set_thumbnail(url="attachment://drapeau.png")
+        except ServiceError:
+            pass  # pas de drapeau, c'est pas grave
         for rank in RANKS:
             names = sorted(by_rank[rank], key=str.lower)
             if names:
@@ -737,7 +880,7 @@ class NGSync(commands.Cog):
         if others:
             embed.add_field(name=f"Autres ({len(others)})", value=truncate(", ".join(sorted(others, key=str.lower))), inline=False)
         embed.set_footer(text="Données NationsGlory, mises à jour aux 5 minutes")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await interaction.followup.send(embed=embed, files=files)
 
     @app_commands.command(name="joueur", description="Pays et grade d'un joueur NationsGlory")
     @app_commands.describe(pseudo="Le pseudo NationsGlory")
@@ -757,7 +900,11 @@ class NGSync(commands.Cog):
         cid = data.get("country_id")
         country = data.get("country_name") or data.get("country")
         if not country and cid:
-            country = st.country_name if cid == st.country_id else cid
+            if cid == st.country_id:
+                country = st.country_name
+            else:
+                names = {c.get("country_id"): c.get("name") for c in await st.api.countries()}
+                country = names.get(cid) or "Pays inconnu"
         embed = discord.Embed(title=f"🎮 {name}", color=BLUE)
         embed.set_thumbnail(url=head_url(name))
         embed.add_field(name="Pays", value=str(country) if country else "Aucun")
@@ -769,6 +916,42 @@ class NGSync(commands.Cog):
             embed.add_field(name="Discord", value=f"<@{link['discord_id']}>")
         embed.set_footer(text=f"Serveur {st.api.server}")
         await reply(interaction, embed=embed)
+
+    @app_commands.command(name="guerres", description="Les guerres du pays : en cours, en négociation et récentes")
+    @app_commands.guild_only()
+    async def guerres(self, interaction: discord.Interaction) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        cid = await st.country()
+        wars = await st.api.wars(cid)
+        embed = discord.Embed(title=f"⚔️ Guerres de {st.country_name}", color=RED)
+
+        def line(w: dict) -> str:
+            enemy = w.get("defender_name") if w.get("attacker_id") == cid else w.get("attacker_name")
+            side = "🗡️ attaque" if w.get("attacker_id") == cid else "🛡️ défend"
+            text = f"{side} contre {alerts.bold(enemy)} · {alerts.reason_label(w.get('reason'))} · depuis le {w.get('declared_on')}"
+            if w.get("status") == "finished":
+                winner = w.get("winner")
+                if winner in ("attacker", "defender"):
+                    won = (winner == "attacker") == (w.get("attacker_id") == cid)
+                    text += " · 🏆 gagnée" if won else " · 💀 perdue"
+                else:
+                    text += " · 🕊️ paix"
+            return text
+
+        for status in ("in_progress", "negotiation", "finished"):
+            rows = [w for w in wars if w.get("status") == status]
+            if rows:
+                shown = [line(w) for w in rows[:8]]
+                if len(rows) > 8:
+                    shown.append(f"… et {len(rows) - 8} autres")
+                embed.add_field(name=f"{alerts.STATUS_LABELS[status]} ({len(rows)})", value=truncate("\n".join(shown)), inline=False)
+        if not wars:
+            embed.description = "Aucune guerre en cours, et aucune finie dans les 30 derniers jours. 🕊️"
+        embed.set_footer(text="Données NationsGlory, mises à jour aux 10 minutes")
+        await reply(interaction, embed=embed, ephemeral=False)
 
     # ---- Commandes admin : /synchro ... -------------------------------------------------------
     @synchro.command(name="tout", description="Synchronise tous les comptes liés maintenant")

@@ -2,8 +2,8 @@
   "format": 1,
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
-  "version": "1.2.0",
-  "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
+  "version": "1.3.0",
+  "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation, annonces du pays, salon de stats, alertes de guerre et de power, classement warzone. Utilise l'API officielle : une seule clé pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",
   "enabled_by": "ng.active",
@@ -173,6 +173,63 @@
           "label": "Annoncer les départs du pays",
           "type": "bool",
           "default": false
+        }
+      ]
+    },
+    {
+      "id": "ng_alertes",
+      "section": "ng",
+      "title": "NationsGlory : guerres et alertes",
+      "icon": "⚔️",
+      "description": "Guerres du pays, power qui baisse, ennemis attaquables et classement warzone du jour.",
+      "fields": [
+        {
+          "key": "salon_guerres_id",
+          "label": "Salon des guerres et alertes",
+          "type": "channel",
+          "default": 0,
+          "help": "Nouvelles guerres, débuts, fins, assauts et alertes de power. Aucun = pas d'alertes."
+        },
+        {
+          "key": "role_alerte_id",
+          "label": "Rôle à mentionner pour les alertes graves",
+          "type": "role",
+          "default": 0,
+          "help": "Mentionné quand on nous déclare la guerre, qu'on passe sous le power ou qu'un ennemi devient attaquable."
+        },
+        {
+          "key": "annoncer_assauts",
+          "label": "Annoncer les assauts gagnés et perdus",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "alerte_power",
+          "label": "Alerte quand le power du pays baisse",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "marge_power",
+          "label": "Marge de power avant l'alerte",
+          "type": "int",
+          "default": 50,
+          "min": 0,
+          "max": 5000,
+          "help": "Alerte quand le power est à moins de X au-dessus des claims. Sous les claims = pays attaquable."
+        },
+        {
+          "key": "alerte_ennemis",
+          "label": "Alerte quand un ennemi passe sous le power",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "salon_warzone_id",
+          "label": "Salon du classement warzone",
+          "type": "channel",
+          "default": 0,
+          "help": "Le top 10 de la journée et le rang du pays, publié après la clôture à 20 h (heure de Paris)."
         }
       ]
     }

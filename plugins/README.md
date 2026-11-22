@@ -4,7 +4,7 @@ Les plugins qu'on installe depuis l'onglet **Plugins** d'un bot (fait avec le mo
 
 | Plugin | Ce qu'il fait | Intents à activer |
 |---|---|---|
-| [`nationsglory`](nationsglory/) | Grades d'un pays NationsGlory ↔ rôles Discord, `/lier` avec validation, annonces du pays, salon de stats. Une seule clé de l'API officielle (variable `NG_API_KEY`) pour tous les serveurs. | Server Members |
+| [`nationsglory`](nationsglory/) | Grades d'un pays NationsGlory ↔ rôles Discord, `/lier` avec validation, annonces du pays, salon de stats, `/guerres`, alertes de guerre et de power, classement warzone du jour. Une seule clé de l'API officielle (variable `NG_API_KEY`) pour tous les serveurs. | Server Members |
 | [`bienvenue`](bienvenue/) | Bienvenue et départ, MP de bienvenue, rôle d'arrivée retiré par un bouton ou par la liaison NationsGlory. | Server Members |
 | [`tickets`](tickets/) | Panneau de tickets, salon privé avec le staff, transcription à la fermeture. | Server Members |
 | [`niveaux`](niveaux/) | XP en écrivant, rôles en récompense, `/rang`, `/classement`. | — |

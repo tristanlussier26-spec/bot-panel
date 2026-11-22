@@ -79,9 +79,22 @@ MEMBERS = [{"country_id": AMOUR, "username": f"Joueur_{i}", "role": "MEMBER"} fo
     {"country_id": AMOUR, "username": "Tristan_QC", "role": "LEADER"},
     {"country_id": AMOUR, "username": "Bob", "role": "OFFICER"},
 ]
-COUNTRIES = [{"country_id": f"00000000-0000-0000-0000-{i:012d}", "name": f"Pays{i}"} for i in range(7)] + [
-    {"country_id": AMOUR, "name": "Amour", "power": 42, "level": 3}
+ENNEMI = "00000000-0000-0000-0000-000000000001"
+COUNTRIES = [{"country_id": f"00000000-0000-0000-0000-{i:012d}", "name": f"Pays{i}", "power": 500, "claims": 100}
+             for i in range(7)] + [
+    {"country_id": AMOUR, "name": "Amour", "power": 42, "level": 3, "claims": 30,
+     "relations": {"allies": ["00000000-0000-0000-0000-000000000002"], "enemies": [ENNEMI]}}
 ]
+# Mêmes formes que les vraies réponses de l'API (relevées sur Jade)
+WARS = [
+    {"war_id": 6780, "attacker_id": ENNEMI, "attacker_name": "Pays1", "defender_id": AMOUR, "defender_name": "Amour",
+     "status": "negotiation", "reason": "KILL_WILDERNESS", "declared_on": "2026-10-22", "started_on": None,
+     "ended_on": None, "winner": None},
+]
+WARZONE = [{"period_start": "2026-11-21", "period_end": "2026-11-22", "rank": i + 1,
+            "country_id": COUNTRIES[i]["country_id"], "country_name": COUNTRIES[i]["name"],
+            "total": 1000 - i, "boat": 0, "petrol": 0, "mine": 0} for i in range(8)]
+PNG = b"\x89PNG fake"
 
 
 def paginate(rows, request, page_size_max=3):
@@ -122,6 +135,25 @@ async def api_url(unused_tcp_port):
             return web.json_response({"status": 410}, status=410)
         return paginate(MEMBERS, request)
 
+    async def wars(request):
+        rows = [w for w in WARS if request.query.get("country") in (None, w["attacker_id"], w["defender_id"])]
+        return paginate(rows, request)
+
+    async def war(request):
+        wid = int(request.match_info["wid"])
+        w = next((w for w in WARS if w["war_id"] == wid), None)
+        if w is None:
+            return web.json_response({"status": 410}, status=410)
+        return web.json_response({"data": {**w, "assaults": w.get("assaults", [])}})
+
+    async def warzone(request):
+        return paginate(WARZONE, request)
+
+    async def image(request):
+        if request.match_info["sha"] != "a" * 64:
+            return web.json_response({"status": 404}, status=404)
+        return web.Response(body=PNG, content_type="image/png")
+
     async def player(request):
         name = request.match_info["name"]
         if name.lower() == "inconnu":
@@ -133,6 +165,10 @@ async def api_url(unused_tcp_port):
     app.router.add_get("/v1/servers/jade/countries/{cid}", country)
     app.router.add_get("/v1/servers/jade/countries/{cid}/members", members)
     app.router.add_get("/v1/servers/jade/players/{name}", player)
+    app.router.add_get("/v1/servers/jade/wars", wars)
+    app.router.add_get("/v1/servers/jade/wars/{wid}", war)
+    app.router.add_get("/v1/servers/jade/rankings/warzone/daily", warzone)
+    app.router.add_get("/v1/images/{sha}.png", image)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", unused_tcp_port).start()
@@ -454,7 +490,7 @@ async def test_stats_and_announcements(host):
     fields = {f.name: f.value for f in embed.fields}
     assert embed.title == "📊 Amour · Jade"
     assert fields["Membres"] == "👥 **7** membres\n👑 Chef : 1\n⭐ Officier : 1\n🛡️ Membre : 5"
-    assert fields["Pays"] == "⚡ Power : 42\nNiveau : 3"
+    assert fields["Pays"] == "⚡ Power : 42\n🗺️ Claims : 30\nNiveau : 3"
 
     before = {"bob": {"username": "Bob", "role": "RECRUIT"}, "zed": {"username": "Zed_", "role": "RECRUIT"}}
     assert await cog.announce_country_changes(guild, st, before) == []  # 1er tour : on prend note
@@ -509,8 +545,7 @@ async def test_without_key_waits_for_host(host):
 async def test_commands_are_registered(host):
     bot, cog, _ = host
     names = {c.qualified_name for c in bot.tree.walk_commands()}
-    assert {"lier", "delier", "compte", "pays", "joueur", "synchro tout", "synchro liste"} <= names
-    assert not names & {"enligne", "guerres"}  # pas dans l'API publique
+    assert {"lier", "delier", "compte", "pays", "joueur", "guerres", "synchro tout", "synchro liste"} <= names
     assert all(c.module.startswith("plugins.nationsglory") for c in bot.tree.get_commands())
 
 
@@ -523,3 +558,102 @@ async def test_concurrent_requests_share_the_limit(api_url):
     assert len(limiter.calls) == 3
     await a.close()
     await b.close()
+
+
+# ---------------------------------------------------------------- guerres, power, warzone
+from plugins.nationsglory import alerts  # noqa: E402
+
+
+def test_war_events_logic():
+    war = dict(WARS[0])
+    assert alerts.war_events(None, [war], AMOUR) == []  # 1er tour : on prend note
+    events = alerts.war_events({}, [war], AMOUR)
+    assert [e.kind for e in events] == ["declared"] and events[0].important  # on se fait attaquer
+    assert "nous déclare la guerre" in alerts.war_line(events[0], AMOUR) and "kill en wilderness" in alerts.war_line(events[0], AMOUR)
+    snap = alerts.war_snapshot([war])
+    started = {**war, "status": "in_progress"}
+    assert [e.kind for e in alerts.war_events(snap, [started], AMOUR)] == ["started"]
+    ended = {**war, "status": "finished", "winner": "defender"}
+    events = alerts.war_events(alerts.war_snapshot([started]), [ended], AMOUR)
+    assert alerts.war_line(events[0], AMOUR).startswith("🏆 Victoire")
+    assert alerts.war_line(alerts.war_events({}, [{**ended, "winner": None}], AMOUR) or
+                           alerts.war_events(snap, [{**ended, "winner": None}], AMOUR)[0], AMOUR).startswith("🕊️")
+    assert alerts.war_events({}, [ended], AMOUR) == []  # finie avant qu'on la voie
+
+
+def test_assault_events_logic():
+    war = {**WARS[0], "status": "in_progress", "assaults": [{"on": "d", "winner": "attacker"}, {"on": "d", "winner": "defender"}]}
+    assert alerts.assault_events(war, None, AMOUR) == ([], 2)
+    events, n = alerts.assault_events(war, 0, AMOUR)
+    assert n == 2 and [alerts.war_line(e, AMOUR)[:1] for e in events] == ["❌", "✅"]  # on défend
+
+
+def test_power_logic():
+    assert alerts.power_level({"power": 99, "claims": 100}, 50) == "sous"
+    assert alerts.power_level({"power": 120, "claims": 100}, 50) == "bas"
+    assert alerts.power_level({"power": 200, "claims": 100}, 50) == "ok"
+    assert alerts.power_level({"power": None, "claims": 100}, 50) is None
+    card = {"power": 99, "claims": 100}
+    assert alerts.power_alert(None, "sous", card, "Amour") == (None, False)  # 1er tour
+    msg, mention = alerts.power_alert("ok", "sous", card, "Amour")
+    assert "sous le power" in msg and mention
+    assert alerts.power_alert("ok", "bas", card, "Amour")[0].startswith("⚠️")
+    assert alerts.power_alert("bas", "ok", card, "Amour")[0].startswith("✅")
+    assert alerts.power_alert("bas", "bas", card, "Amour") == (None, False)
+    rows = [{"country_id": "x", "name": "X", "power": 5, "claims": 9}, {"country_id": "y", "name": "Y", "power": 9, "claims": 5}]
+    now = alerts.attackable_enemies(["x", "y"], rows)
+    assert list(now) == ["x"] and alerts.enemy_lines(None, now) == [] and alerts.enemy_lines(["x"], now) == []
+    assert "**X**" in alerts.enemy_lines([], now)[0]
+
+
+def test_warzone_summary():
+    day, top, ours = alerts.warzone_summary(WARZONE, AMOUR, top=3)
+    assert day == "2026-11-22" and top[0].startswith("🥇") and len(top) == 3
+    assert ours.startswith("`8.`") and "__**Amour**__" in ours  # hors du top : ajouté à part
+    assert alerts.warzone_summary(WARZONE, "pas-classé", top=3)[2] is None
+    assert alerts.warzone_summary(WARZONE, AMOUR)[2] is None  # dans le top 10
+    assert alerts.warzone_summary([], AMOUR) == (None, [], None)
+
+
+async def test_alerts_in_bot(host):
+    bot, cog, calls = host
+    await bot.configure(555, {"active": True, "serveur": "jade", "pays": "Amour", "grades": GRADES,
+                              "salon_guerres_id": 80, "role_alerte_id": 81, "salon_warzone_id": 82, "marge_power": 20})
+    st = cog.state(555)
+    guild, _ = fake_guild(555)
+    chan = SimpleNamespace(id=80, send=AsyncMock())
+    wz = SimpleNamespace(id=82, send=AsyncMock())
+    guild.channels.update({80: chan, 82: wz})
+
+    saved_wars = list(WARS)
+    WARS.clear()  # pas de guerre au 1er tour
+    try:
+        assert await cog.run_alerts(guild, st) == []  # 1er tour : on prend note, rien à publier
+        assert await cog.store.get_value("ng_power:555") == "bas"  # power 42, claims 30, marge 20
+
+        # Une guerre nous est déclarée et un ennemi passe sous le power
+        WARS.extend(saved_wars)
+        COUNTRIES[1]["power"] = 10
+        for c in cog.clients.values():
+            c._cached.clear()
+            c._countries = None
+        lines = await cog.run_alerts(guild, st)
+    finally:
+        COUNTRIES[1]["power"] = 500
+        WARS[:] = saved_wars
+    assert any("nous déclare la guerre" in x for x in lines) and any("Pays1" in x and "attaquer" in x for x in lines)
+    sent = chan.send.call_args
+    assert sent.args[0].startswith("<@&81>") and sent.kwargs["allowed_mentions"].roles[0].id == 81
+
+    # Warzone : publié une fois par journée close
+    assert await cog.run_warzone(guild, st) and not await cog.run_warzone(guild, st)
+    embed = wz.send.call_args.kwargs["embed"]
+    assert embed.title == "🏁 Warzone du 2026-11-22 · Jade" and "__**Amour**__" in embed.description
+
+    # Drapeau : la clé est exigée, le bot le télécharge
+    api = st.api
+    assert await api.image("a" * 64) == PNG and await api.image("pas-un-sha") is None
+    n = len(calls)
+    await api.image("a" * 64)
+    assert len(calls) == n  # en cache
+

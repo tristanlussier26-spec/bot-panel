@@ -11,7 +11,7 @@ import asyncio
 import re
 import socket
 import time
-from collections import deque
+from collections import defaultdict, deque
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -25,6 +25,8 @@ PAGE_SIZE = 100
 MAX_PAGES = 100
 SERVER_RE = re.compile(r"^[a-z0-9_-]{2,24}$")
 COUNTRIES_MAX_AGE = 3600  # la liste des pays d'un serveur change rarement
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+IMAGE_CACHE_MAX = 64
 
 
 def normalize_target(server: str, country: str) -> tuple[str, str]:
@@ -126,6 +128,9 @@ class NationsGlory:
         self._members_cache: dict[str, tuple[float, dict[str, dict]]] = {}
         self._countries: tuple[float, list[dict]] | None = None
         self._countries_lock = asyncio.Lock()
+        self._images: dict[str, bytes] = {}
+        self._cached: dict[str, tuple[float, object]] = {}
+        self._cached_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def _http(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -140,7 +145,7 @@ class NationsGlory:
         if self._session is not None and not self._session.closed:
             await self._session.close()
 
-    async def _get(self, path: str, params: dict | None = None) -> Any:
+    async def _get(self, path: str, params: dict | None = None, *, raw: bool = False) -> Any:
         if not self.api_key:
             raise NationsGloryError(
                 "NG_API_KEY est vide : mets la clé dans l'onglet Plugins de Bot Panel",
@@ -153,7 +158,7 @@ class NationsGlory:
                 async with self._http().get(
                     f"{self.base_url}{path}",
                     params=params,
-                    headers={"X-API-Key": self.api_key, "Accept": "application/json"},
+                    headers={"X-API-Key": self.api_key, "Accept": "*/*" if raw else "application/json"},
                     proxy=self.proxy,
                 ) as resp:
                     if resp.status in (404, 410):  # 410 = pays disparu
@@ -171,6 +176,8 @@ class NationsGlory:
                         raise NationsGloryError(
                             f"API NationsGlory : HTTP {resp.status} sur {path} : {detail}", status=resp.status
                         )
+                    if raw:
+                        return await resp.read()
                     return await resp.json(content_type=None)
             except NationsGloryError:
                 raise
@@ -264,3 +271,60 @@ class NationsGlory:
     async def get_player(self, username: str) -> dict | None:
         data = unwrap(await self._get(f"/servers/{self.server}/players/{username}"))
         return data if isinstance(data, dict) else None
+
+    # ---- Données partagées (un cache par serveur NG, commun à tous les serveurs Discord) ----------
+    async def _shared(self, key: str, max_age: float, fetch) -> Any:
+        """Garde une réponse `max_age` secondes. Deux serveurs Discord qui demandent la même chose
+        en même temps font une seule requête."""
+        async with self._cached_locks[key]:
+            hit = self._cached.get(key)
+            if hit and time.monotonic() - hit[0] < max_age:
+                return hit[1]
+            value = await fetch()
+            self._cached[key] = (time.monotonic(), value)
+            return value
+
+    # ---- Guerres (domaine war, mis à jour aux 10 minutes) -----------------------------------
+    async def wars(self, cid: str, *, max_age: float = 300) -> list[dict]:
+        """Guerres d'un pays : en négociation, en cours et finies depuis moins de 30 jours."""
+        async def fetch():
+            return await self._paginate(f"/servers/{self.server}/wars", {"country": cid}) or []
+        return await self._shared(f"wars:{cid}", max_age, fetch)
+
+    async def war(self, war_id: int, *, max_age: float = 300) -> dict | None:
+        """Fiche complète d'une guerre (assauts, missiles). None si elle existe plus."""
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/wars/{int(war_id)}"))
+            return data if isinstance(data, dict) else None
+        return await self._shared(f"war:{int(war_id)}", max_age, fetch)
+
+    # ---- Classements --------------------------------------------------------------------------
+    async def warzone_daily(self, *, max_age: float = 900) -> list[dict]:
+        """Classement warzone de la dernière journée close (publié à 20 h, heure de Paris)."""
+        path = f"/servers/{self.server}/rankings/warzone/daily"
+
+        async def fetch():
+            # Une seule requête pour voir si la journée a changé ; tout le classement juste dans ce cas
+            first, _ = extract_page(await self._get(path, {"limit": 1}))
+            day = first[0].get("period_end") if first else None
+            known = self._cached.get("warzone_daily:full")
+            if known and known[1] and known[1][0].get("period_end") == day:
+                return known[1]
+            rows = await self._paginate(path) or []
+            self._cached["warzone_daily:full"] = (time.monotonic(), rows)
+            return rows
+        return await self._shared("warzone_daily", max_age, fetch)
+
+    # ---- Images (drapeaux) : la clé est exigée, donc Discord peut pas les lire par leur adresse ----
+    async def image(self, sha256: str | None) -> bytes | None:
+        sha = str(sha256 or "").lower()
+        if not SHA_RE.match(sha):
+            return None
+        if sha not in self._images:
+            data = await self._get(f"/images/{sha}.png", raw=True)
+            if not data:
+                return None
+            if len(self._images) >= IMAGE_CACHE_MAX:
+                self._images.pop(next(iter(self._images)))
+            self._images[sha] = data
+        return self._images[sha]
