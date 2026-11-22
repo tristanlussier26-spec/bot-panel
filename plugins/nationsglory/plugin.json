@@ -3,7 +3,7 @@
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
   "version": "1.3.0",
-  "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation, annonces du pays, salon de stats, alertes de guerre et de power, classement warzone. Utilise l'API officielle : une seule clé pour tous les serveurs.",
+  "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation, annonces, salon de stats, alertes de guerre et de power, warzone, classements, membres en ligne et inactifs. Utilise l'API officielle : une seule clé pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",
   "enabled_by": "ng.active",
@@ -230,6 +230,20 @@
           "type": "channel",
           "default": 0,
           "help": "Le top 10 de la journée et le rang du pays, publié après la clôture à 20 h (heure de Paris)."
+        },
+        {
+          "key": "warzone_semaine",
+          "label": "Publier aussi la warzone de la semaine",
+          "type": "bool",
+          "default": true,
+          "help": "Le dimanche après 20 h (heure de Paris), dans le même salon."
+        },
+        {
+          "key": "suivre_activite",
+          "label": "Suivre l'activité des membres (/inactifs)",
+          "type": "bool",
+          "default": true,
+          "help": "Le bot relit doucement la dernière connexion de chaque membre (environ 2 requêtes par minute)."
         }
       ]
     }

@@ -95,6 +95,16 @@ WARZONE = [{"period_start": "2026-11-21", "period_end": "2026-11-22", "rank": i 
             "country_id": COUNTRIES[i]["country_id"], "country_name": COUNTRIES[i]["name"],
             "total": 1000 - i, "boat": 0, "petrol": 0, "mine": 0} for i in range(8)]
 PNG = b"\x89PNG fake"
+WARZONE_WEEK = [{**r, "period_start": "2026-11-15"} for r in WARZONE]
+ONLINE = ["tristan_qc", "Bob", "Quelquun"]
+LOGINS = {"tristan_qc": "2026-11-22", "bob": "2026-11-01", "joueur_0": "private"}  # les autres : 404
+ALLIANCE = {"alliance_key": "b7f6c07bf21591d4", "name": "Hojo", "color": "red", "opened": True, "tags": [],
+            "founded_on": "2026-10-01", "prestige_points": 900, "prestige_rank": 1, "countries_count": 2,
+            "total_claims": 5000, "bank": 12345, "description": "La plus forte"}
+COUNTRIES[-1]["alliance_key"] = COUNTRIES[3]["alliance_key"] = ALLIANCE["alliance_key"]
+COUNTRIES[-1].update(members_count=7, score=999, role_names={"LEADER": "Empereur", "OFFICER": "Conseiller"})
+for _c in COUNTRIES[:7]:
+    _c["members_count"] = 3
 
 
 def paginate(rows, request, page_size_max=3):
@@ -126,12 +136,13 @@ async def api_url(unused_tcp_port):
         return paginate(COUNTRIES, request)
 
     async def country(request):
-        if request.match_info["cid"] != AMOUR:
+        row = next((c for c in COUNTRIES if c["country_id"] == request.match_info["cid"]), None)
+        if row is None:
             return web.json_response({"status": 404}, status=404)
-        return web.json_response(COUNTRIES[-1])
+        return web.json_response(row)
 
     async def members(request):
-        if request.match_info["cid"] != AMOUR:
+        if request.match_info["cid"] not in {c["country_id"] for c in COUNTRIES}:
             return web.json_response({"status": 410}, status=410)
         return paginate(MEMBERS, request)
 
@@ -154,6 +165,26 @@ async def api_url(unused_tcp_port):
             return web.json_response({"status": 404}, status=404)
         return web.Response(body=PNG, content_type="image/png")
 
+    async def warzone_week(request):
+        return paginate(WARZONE_WEEK, request)
+
+    async def online(request):
+        return paginate([{"username": u} for u in ONLINE], request)
+
+    async def last_login(request):
+        name = request.match_info["name"]
+        value = LOGINS.get(name.lower())
+        if value == "private":
+            return web.json_response({"code": "profile_private", "status": 403}, status=403)
+        if value is None:
+            return web.json_response({"code": "player_not_found", "status": 404}, status=404)
+        return web.json_response({"data": {"username": name, "last_login_on": value}})
+
+    async def alliance(request):
+        if request.match_info["key"] != ALLIANCE["alliance_key"]:
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": ALLIANCE})
+
     async def player(request):
         name = request.match_info["name"]
         if name.lower() == "inconnu":
@@ -169,6 +200,10 @@ async def api_url(unused_tcp_port):
     app.router.add_get("/v1/servers/jade/wars/{wid}", war)
     app.router.add_get("/v1/servers/jade/rankings/warzone/daily", warzone)
     app.router.add_get("/v1/images/{sha}.png", image)
+    app.router.add_get("/v1/servers/jade/rankings/warzone/weekly", warzone_week)
+    app.router.add_get("/v1/servers/jade/online", online)
+    app.router.add_get("/v1/servers/jade/players/{name}/last-login", last_login)
+    app.router.add_get("/v1/servers/jade/alliances/{key}", alliance)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", unused_tcp_port).start()
@@ -490,7 +525,7 @@ async def test_stats_and_announcements(host):
     fields = {f.name: f.value for f in embed.fields}
     assert embed.title == "📊 Amour · Jade"
     assert fields["Membres"] == "👥 **7** membres\n👑 Chef : 1\n⭐ Officier : 1\n🛡️ Membre : 5"
-    assert fields["Pays"] == "⚡ Power : 42\n🗺️ Claims : 30\nNiveau : 3"
+    assert fields["Pays"] == "⚡ Power : 42\n🗺️ Claims : 30\n🏆 Score : 999\nNiveau : 3"
 
     before = {"bob": {"username": "Bob", "role": "RECRUIT"}, "zed": {"username": "Zed_", "role": "RECRUIT"}}
     assert await cog.announce_country_changes(guild, st, before) == []  # 1er tour : on prend note
@@ -545,7 +580,9 @@ async def test_without_key_waits_for_host(host):
 async def test_commands_are_registered(host):
     bot, cog, _ = host
     names = {c.qualified_name for c in bot.tree.walk_commands()}
-    assert {"lier", "delier", "compte", "pays", "joueur", "guerres", "synchro tout", "synchro liste"} <= names
+    assert {"lier", "delier", "compte", "pays", "joueur", "guerres", "guerre", "enligne", "classement-pays", "alliance",
+            "inactifs", "synchro tout", "synchro liste"} <= names
+    assert "classement" not in names  # celui du plugin Niveaux
     assert all(c.module.startswith("plugins.nationsglory") for c in bot.tree.get_commands())
 
 
@@ -647,7 +684,7 @@ async def test_alerts_in_bot(host):
 
     # Warzone : publié une fois par journée close
     assert await cog.run_warzone(guild, st) and not await cog.run_warzone(guild, st)
-    embed = wz.send.call_args.kwargs["embed"]
+    embed = wz.send.call_args_list[0].kwargs["embed"]
     assert embed.title == "🏁 Warzone du 2026-11-22 · Jade" and "__**Amour**__" in embed.description
 
     # Drapeau : la clé est exigée, le bot le télécharge
@@ -657,3 +694,150 @@ async def test_alerts_in_bot(host):
     await api.image("a" * 64)
     assert len(calls) == n  # en cache
 
+
+
+# ---------------------------------------------------------------- classements, en ligne, activité
+from datetime import date  # noqa: E402
+
+from plugins.nationsglory import insights  # noqa: E402
+
+
+def test_ranking_logic():
+    rows = insights.ranking(COUNTRIES + [{"country_id": "w", "name": "Wilderness", "power": 999999, "members_count": 0}], "power")
+    assert rows[0]["name"] == "Pays0" and all(r["name"] != "Wilderness" for r in rows)  # pays vides écartés
+    lines, ours = insights.ranking_lines(rows, "power", AMOUR, top=3)
+    assert len(lines) == 3 and lines[0].startswith("🥇") and ours.startswith("`8.`") and "__**Amour**__" in ours
+    lines, ours = insights.ranking_lines(insights.ranking(COUNTRIES, "banque"), "banque", AMOUR)
+    assert lines == [] and ours is None  # personne a de banque dans ces données
+
+
+def test_online_and_inactivity_logic():
+    members = {"a": {"username": "A", "role": "RECRUIT"}, "b": {"username": "B", "role": "LEADER"},
+               "c": {"username": "C", "role": "MEMBER"}, "d": {"username": "D", "role": "MEMBER"}, "e": {"username": "E"}}
+    assert [m["username"] for m in insights.online_members(members, {"a", "b", "zz"})] == ["B", "A"]
+    logins = {"a": ["2026-11-01", 0], "b": ["2026-11-21", 0], "c": ["none", 0], "d": ["private", 0]}
+    report = insights.inactivity(members, logins, date(2026, 11, 22), 7)
+    assert [(m["username"], n) for m, n in report["inactifs"]] == [("A", 21)]
+    assert [m["username"] for m in report["absents"]] == ["C"] and [m["username"] for m in report["prives"]] == ["D"]
+    assert [m["username"] for m in report["inconnus"]] == ["E"] and report["verifies"] == 4
+    assert insights.next_to_check(members, logins, 100.0, 50) == "E"  # jamais vérifié d'abord
+    logins["e"] = ["2026-11-22", 90.0]
+    assert insights.next_to_check(members, logins, 100.0, 50) == "A"  # puis le plus vieux
+    assert insights.next_to_check(members, {k: [v, 99.0] for k, v in logins.items()}, 100.0, 50) is None
+
+
+def test_war_detail_lines():
+    war = {**WARS[0], "assaults": [{"winner": "attacker"}, {"winner": "attacker"}, {"winner": "defender"}],
+           "missiles": {"attacker": {"Conventional": 4, "Nuclear": 1}, "defender": {}},
+           "agreements_signed": [{"type": "peace", "signed_on": "2026-10-30", "duration_days": 7, "status": "active"}]}
+    fields = dict(insights.war_detail_lines(war, {}))
+    assert fields["Assauts"] == "🗡️ Pays1 : 2 · 🛡️ Amour : 1"
+    assert fields["Missiles"] == "**Pays1** : 4× Conventional, 1× Nuclear" and "peace" in fields["Accords"]
+
+
+async def _setup_guild(bot, cog, extra=None):
+    await bot.configure(555, {"active": True, "serveur": "jade", "pays": "Amour", "grades": GRADES, **(extra or {})})
+    guild, _ = fake_guild(555)
+    return cog.state(555), guild
+
+
+def said(i):
+    call = i.followup.send.call_args
+    return call.kwargs.get("embed") or call.kwargs.get("content")
+
+
+async def test_consultation_commands(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog)
+    user = add_member(guild, 42)
+
+    i = inter(guild, user)
+    await cog.enligne.callback(cog, i)
+    embed = said(i)
+    assert embed.title == "🟢 Amour : 2 en ligne" and "3 joueurs connectés" in embed.description
+    assert [f.name for f in embed.fields] == ["👑 Empereur", "⭐ Conseiller"]  # noms de grades du pays
+
+    i = inter(guild, user)
+    await cog.classement.callback(cog, i, "score")
+    embed = said(i)
+    assert embed.title == "🏆 Classement Score · Jade" and embed.description.startswith("🥇 __**Amour**__ · 999")
+
+    i = inter(guild, user)
+    await cog.pays.callback(cog, i, "pays3")
+    embed = i.followup.send.call_args.kwargs["embed"]
+    assert embed.title == "🏳️ Pays3" and "**7** membres" in embed.description  # même faux membres
+    i = inter(guild, user)
+    await cog.pays.callback(cog, i, "Atlantide")
+    assert "trouve pas le pays" in said(i)
+    i = inter(guild, user)
+    await cog.pays.callback(cog, i, None)
+    embed = i.followup.send.call_args.kwargs["embed"]
+    names = [f.name for f in embed.fields]
+    assert embed.title == "🏳️ Amour" and "👑 Empereur (1)" in names and "⚔️ Ennemis (1)" in names
+
+    i = inter(guild, user)
+    await cog.guerre.callback(cog, i, 6780)
+    assert said(i).title == "⚔️ Guerre n°6780 : Pays1 contre Amour"
+    i = inter(guild, user)
+    await cog.guerre.callback(cog, i, 1)
+    assert "existe pas" in said(i)
+
+    i = inter(guild, user)
+    await cog.alliance.callback(cog, i, None)
+    embed = said(i)
+    assert embed.title == "🛡️ Alliance Hojo" and {"Pays (2)", "Banque", "Candidatures"} <= {f.name for f in embed.fields}
+    i = inter(guild, user)
+    await cog.alliance.callback(cog, i, "Pays5")
+    assert "aucune alliance" in said(i)
+
+
+async def test_activity_sweep_and_inactifs(host, monkeypatch):
+    bot, cog, calls = host
+    st, guild = await _setup_guild(bot, cog)
+    monkeypatch.setattr(sys.modules["plugins.nationsglory.cog"], "paris_today", lambda: date(2026, 11, 22))
+    checked = []
+    for _ in range(9):
+        cog._last_activity.clear()  # pas besoin d'attendre 30 s entre deux vérifications
+        checked.append(await cog.check_activity(st))
+    assert sorted(n for n in checked if n) == sorted(m["username"] for m in MEMBERS) and checked[-2:] == [None, None]
+    n = len(calls)
+    assert await cog.check_activity(st) is None and len(calls) == n  # moins de 30 s : rien
+
+    i = inter(guild, add_member(guild, 42))
+    await cog.inactifs.callback(cog, i, 7)
+    embed = said(i)
+    assert embed.description == "Bob (Conseiller) · 21 j"
+    fields = {f.name: f.value for f in embed.fields}
+    assert fields["Profil privé (1)"] == "Joueur_0" and fields["Plus de 90 jours (4)"].count("Joueur_") == 4
+    assert embed.footer.text.startswith("7/7 membres vérifiés")
+    # Un 403 « profil privé » doit pas mettre le bot en pause comme une clé refusée
+    assert st.paused_until == 0
+
+
+async def test_weekly_warzone_and_stats_extras(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_warzone_id": 82, "salon_stats_id": 666})
+    wz = SimpleNamespace(id=82, send=AsyncMock())
+    sent = []
+
+    async def send(**kw):
+        sent.append(kw)
+        return SimpleNamespace(id=1)
+
+    guild.channels.update({82: wz, 666: SimpleNamespace(id=666, send=send, get_partial_message=None)})
+    assert await cog.run_warzone(guild, st)
+    titles = [c.kwargs["embed"].title for c in wz.send.call_args_list]
+    assert titles == ["🏁 Warzone du 2026-11-22 · Jade", "🏆 Warzone de la semaine du 2026-11-15 au 2026-11-22 · Jade"]
+    assert not await cog.run_warzone(guild, st)
+    await cog.run_status(guild, st)
+    fields = {f.name: f.value for f in sent[0]["embed"].fields}
+    assert fields["En ce moment"] == "🟢 En ligne : 2\n⚔️ Guerres en cours : 0 (+1 en négociation)"
+
+
+async def test_online_dispatched_for_counters(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog)
+    seen = []
+    bot.dispatch = lambda name, *args: seen.append((name, args))
+    await cog.run_sync(guild, st)
+    assert ("ng_online_update", (555, "Amour", 2)) in seen

@@ -19,6 +19,7 @@ COUNTERS = {
     "bots": ("salon_bots", "format_bots"),
     "boosts": ("salon_boosts", "format_boosts"),
     "pays": ("salon_pays", "format_pays"),
+    "pays_en_ligne": ("salon_pays_en_ligne", "format_pays_en_ligne"),
 }
 EDIT_GAP = 5 * 60  # Discord permet 2 renommages par 10 minutes par salon
 
@@ -35,6 +36,7 @@ class Counters(commands.Cog):
         self.bot = bot
         self.host = bot.plugin_host  # API du bot hôte (Bot Panel)
         self.ng: dict[int, tuple[str, int]] = {}  # serveur -> (pays, nombre de membres), du plugin NationsGlory
+        self.ng_online: dict[int, int] = {}  # serveur -> membres du pays en ligne, du plugin NationsGlory
         self.last_edit: dict[int, float] = {}
         self.pending: set[int] = set()
 
@@ -54,6 +56,7 @@ class Counters(commands.Cog):
             "bots": len(members) - humans if members else None,
             "boosts": getattr(guild, "premium_subscription_count", 0) or 0,
             "pays": self.ng.get(guild.id, (None, None))[1],
+            "pays_en_ligne": self.ng_online.get(guild.id),
         }
 
     def names(self, guild: discord.Guild) -> dict[int, str]:
@@ -108,6 +111,11 @@ class Counters(commands.Cog):
         self.ng[guild_id] = (country, len(members))
 
     @commands.Cog.listener()
+    async def on_ng_online_update(self, guild_id: int, country: str, count: int) -> None:
+        """Du plugin Synchro NationsGlory : combien de membres du pays sont connectés en jeu."""
+        self.ng_online[guild_id] = int(count)
+
+    @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
         await self.refresh(member.guild)
 
@@ -133,6 +141,7 @@ class Counters(commands.Cog):
         category = await guild.create_category("📊 Statistiques", overwrites=locked, position=0, reason="Salons compteurs")
         values = {"active": True}
         wanted = ["membres", "humains", "boosts"] + (["pays"] if guild.id in self.ng else [])
+        wanted += ["pays_en_ligne"] if guild.id in self.ng_online else []
         for key in wanted:
             channel_key, fmt_key = COUNTERS[key]
             if (value := self.values(guild)[key]) is None:

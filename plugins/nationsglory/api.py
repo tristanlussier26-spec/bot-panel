@@ -13,7 +13,7 @@ import socket
 import time
 from collections import defaultdict, deque
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import aiohttp
 
@@ -245,9 +245,14 @@ class NationsGlory:
             user_message="⚙️ Le pays configuré est introuvable sur NationsGlory. Vérifie le serveur et le pays dans les options du bot.",
         )
 
-    async def get_country(self, cid: str) -> dict | None:
-        data = unwrap(await self._get(f"/servers/{self.server}/countries/{cid}"))
-        return data if isinstance(data, dict) else None
+    async def get_country(self, cid: str, *, max_age: float = 0) -> dict | None:
+        """Fiche complète d'un pays. Avec `max_age`, la fiche est partagée (stats, alertes, /pays)."""
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/countries/{cid}"))
+            return data if isinstance(data, dict) else None
+        if not max_age:
+            return await fetch()
+        return await self._shared(f"card:{cid}", max_age, fetch)
 
     async def members(self, cid: str, *, max_age: float = 0) -> dict[str, dict]:
         """Membres du pays : {pseudo en minuscules: {"username": ..., "role": "LEADER"|...}}."""
@@ -301,19 +306,60 @@ class NationsGlory:
     # ---- Classements --------------------------------------------------------------------------
     async def warzone_daily(self, *, max_age: float = 900) -> list[dict]:
         """Classement warzone de la dernière journée close (publié à 20 h, heure de Paris)."""
-        path = f"/servers/{self.server}/rankings/warzone/daily"
+        return await self.warzone("daily", max_age=max_age)
+
+    async def warzone(self, period: str, *, max_age: float = 900) -> list[dict]:
+        """Classement warzone clos : « daily » (chaque jour à 20 h) ou « weekly » (le dimanche à 20 h)."""
+        if period not in ("daily", "weekly"):
+            raise ValueError(period)
+        path = f"/servers/{self.server}/rankings/warzone/{period}"
 
         async def fetch():
-            # Une seule requête pour voir si la journée a changé ; tout le classement juste dans ce cas
+            # Une seule requête pour voir si la période a changé ; tout le classement juste dans ce cas
             first, _ = extract_page(await self._get(path, {"limit": 1}))
             day = first[0].get("period_end") if first else None
-            known = self._cached.get("warzone_daily:full")
+            known = self._cached.get(f"warzone_{period}:full")
             if known and known[1] and known[1][0].get("period_end") == day:
                 return known[1]
             rows = await self._paginate(path) or []
-            self._cached["warzone_daily:full"] = (time.monotonic(), rows)
+            self._cached[f"warzone_{period}:full"] = (time.monotonic(), rows)
             return rows
-        return await self._shared("warzone_daily", max_age, fetch)
+        return await self._shared(f"warzone_{period}", max_age, fetch)
+
+    # ---- Joueurs en ligne et activité ---------------------------------------------------------
+    async def online(self, *, max_age: float = 240) -> set[str]:
+        """Pseudos (en minuscules) des joueurs connectés au serveur NG (domaine presence, aux 5 min)."""
+        async def fetch():
+            rows = await self._paginate(f"/servers/{self.server}/online") or []
+            return {str(r.get("username") or "").lower() for r in rows if r.get("username")}
+        return await self._shared("online", max_age, fetch)
+
+    async def last_login(self, username: str) -> str | None:
+        """Jour de la dernière connexion (AAAA-MM-JJ, heure de Paris).
+        None : aucune date publiée (pas venu depuis plus de 90 jours). « private » : profil privé."""
+        try:
+            data = unwrap(await self._get(f"/servers/{self.server}/players/{quote(username, safe='')}/last-login"))
+        except NationsGloryError as e:
+            if e.status == 403 and "profile_private" in str(e):
+                return "private"  # pas un problème de clé : le joueur cache sa fiche
+            raise
+        if isinstance(data, dict) and isinstance(data.get("last_login_on"), str):
+            return data["last_login_on"]
+        return None
+
+    # ---- Alliances ------------------------------------------------------------------------------
+    async def alliance(self, key: str, *, max_age: float = 300) -> dict | None:
+        if not re.fullmatch(r"[0-9a-f]{16}", str(key or "")):
+            return None
+
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/alliances/{key}"))
+            return data if isinstance(data, dict) else None
+        return await self._shared(f"alliance:{key}", max_age, fetch)
+
+    async def country_members(self, cid: str, *, max_age: float = 240) -> dict[str, dict]:
+        """Membres de n'importe quel pays (pour /pays <nom>), gardés en cache quelques minutes."""
+        return await self.members(cid, max_age=max_age)
 
     # ---- Images (drapeaux) : la clé est exigée, donc Discord peut pas les lire par leur adresse ----
     async def image(self, sha256: str | None) -> bytes | None:
