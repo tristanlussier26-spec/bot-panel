@@ -6,5 +6,7 @@ async def setup(bot) -> None:
     if getattr(bot, "plugin_host", None) is None:
         raise RuntimeError("ce bot supporte pas les plugins Bot Panel (bot.plugin_host manquant)")
     from .cog import NGSync  # importé ici : le bot hôte est prêt
+    from .infos import NGInfos
 
     await bot.add_cog(NGSync(bot))
+    await bot.add_cog(NGInfos(bot))

@@ -14,23 +14,26 @@ Liaison des comptes :
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import re
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from . import alerts, insights
 from .api import NationsGlory, RateLimiter, normalize_target
 from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, make_embed, reply, truncate
 from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
 from .store import Store
+from .veille_run import FORUM_EVERY, MARKET_EVERY, VeilleMixin
 
 log = logging.getLogger("plugin.nationsglory")
 
@@ -57,7 +60,22 @@ def fmt_int(value) -> str:
 
 
 COUNTRY_STATS = (("power", "⚡ Power"), ("power_max", "Power max"), ("claims", "🗺️ Claims"),
-                 ("bank", "💰 Trésorerie"), ("mmr", "🏅 MMR"), ("level", "Niveau"))
+                 ("bank_balance", "💰 Trésorerie"), ("score", "🏆 Score"), ("mmr", "🏅 MMR"), ("level", "Niveau"))
+ALERTS_EVERY = 5 * 60  # pays aux 5 min ; les guerres sont mises à jour aux 10 min chez NationsGlory
+WARZONE_EVERY = 15 * 60
+ORANGE = 0xE67E22
+ACTIVITY_REFRESH = 12 * 3600  # dernière connexion d'un membre relue aux 12 h (publiée au jour près)
+ACTIVITY_EVERY = 30  # une vérification aux 30 s par pays : ~110 membres en une heure, ~2 requêtes/min
+
+
+def paris_today() -> date:
+    """La date à Paris : NationsGlory publie les dernières connexions à l'heure de Paris."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Europe/Paris")).date()
+    except Exception:  # noqa: BLE001 - pas de base de fuseaux horaires : Paris ≈ UTC+1
+        return (datetime.now(timezone.utc) + timedelta(hours=1)).date()
 
 
 def build_stats_embed(server: str, country: str, card: dict, members: dict[str, dict]) -> discord.Embed:
@@ -75,7 +93,7 @@ def build_stats_embed(server: str, country: str, card: dict, members: dict[str, 
         value = card.get(key)
         if isinstance(value, (int, float, str)) and not isinstance(value, bool):
             text = fmt_int(value) if isinstance(value, int) else str(value)
-            stats.append(f"{label} : {text}{' $' if key == 'bank' else ''}")
+            stats.append(f"{label} : {text}{' $' if key == 'bank_balance' else ''}")
     if stats:
         embed.add_field(name="Pays", value="\n".join(stats), inline=True)
     embed.set_footer(text="Données de l'API NationsGlory, mises à jour aux 5 minutes")
@@ -137,6 +155,34 @@ class GuildNG:
         self.announce = {
             k: bool(cfg.get(f"annoncer_{k}", d)) for k, d in (("arrivees", True), ("promotions", True), ("departs", False))
         }
+        # Guerres et alertes (page « NationsGlory : guerres et alertes »)
+        self.war_channel_id = chan("salon_guerres_id")
+        self.alert_role_id = chan("role_alerte_id")
+        self.announce_assaults = bool(cfg.get("annoncer_assauts", True))
+        self.power_alert = bool(cfg.get("alerte_power", True))
+        self.power_margin = max(0, int(cfg.get("marge_power", 50) or 0))
+        self.enemy_alert = bool(cfg.get("alerte_ennemis", True))
+        self.warzone_channel_id = chan("salon_warzone_id")
+        self.warzone_weekly = bool(cfg.get("warzone_semaine", True))
+        self.track_activity = bool(cfg.get("suivre_activite", True))
+        # Veille (page « NationsGlory : rapports et veille »)
+        self.report_channel_id = chan("salon_rapport_id")
+        self.report_hour = min(23, max(0, int(cfg.get("heure_rapport", 22) or 0)))
+        self.tz = str(cfg.get("fuseau") or "America/Toronto")
+        self.diplomacy_alert = bool(cfg.get("alerte_diplomatie", True))
+        self.watchlist = [str(x).strip() for x in cfg.get("pays_surveilles") or [] if str(x).strip()][:25]
+        self.forum_channel_id = chan("salon_forum_id")
+        self.forum_category = str(cfg.get("categorie_forum") or "annonces").strip()
+        self.market_channel_id = chan("salon_marche_id")
+        self.market_pct = max(1, int(cfg.get("seuil_marche", 10) or 10))
+        self.ingame_role_id = chan("role_en_jeu_id")
+        self.inactive_role_id = chan("role_inactif_id")
+        self.inactive_days = max(1, int(cfg.get("jours_inactif", 14) or 14))
+        self.last_report_day: str | None = None
+        self.last_forum = -1e9
+        self.last_market = -1e9
+        self.last_alerts = -1e9
+        self.last_warzone = -1e9
         self.last_sync = -1e9
         self.last_status = -1e9
         self.paused_until = 0.0
@@ -161,7 +207,7 @@ class GuildNG:
         return await self.api.members(await self.country(), max_age=max_age)
 
 
-class NGSync(commands.Cog):
+class NGSync(VeilleMixin, commands.Cog):
     synchro = app_commands.Group(
         name="synchro",
         description="Gestion des comptes liés et de la synchro des grades NationsGlory",
@@ -178,6 +224,7 @@ class NGSync(commands.Cog):
         self.statuses: dict[int, str] = {}
         self.limiter = RateLimiter(int(os.getenv("NG_API_RPM", "50") or 50))  # NationsGlory : 60/min par clé
         self._locks: defaultdict[tuple[int, int], asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._last_activity: dict[tuple[str, str], float] = {}  # (serveur NG, pays) -> dernière vérification
 
     async def cog_load(self) -> None:
         await self.store.connect()
@@ -272,9 +319,16 @@ class NGSync(commands.Cog):
         if not server or not country:
             errors.append("NationsGlory : remplis le serveur et le pays")
         try:
-            parse_settings(ng)
+            settings, _ = parse_settings(ng)
         except ConfigError as e:
             errors.append(f"NationsGlory : {e}")
+        else:
+            for key, label in (("role_en_jeu_id", "« connecté en jeu »"), ("role_inactif_id", "« inactif »")):
+                role_id = int(ng.get(key, 0) or 0)
+                if role_id and role_id in settings.managed_roles:
+                    errors.append(f"NationsGlory : le rôle {label} est déjà utilisé pour un grade ou le pays")
+            if int(ng.get("role_en_jeu_id", 0) or 0) and ng.get("role_en_jeu_id") == ng.get("role_inactif_id"):
+                errors.append("NationsGlory : les rôles « connecté en jeu » et « inactif » doivent être différents")
         return errors
 
     async def before_panel_save(self, guild: discord.Guild, section: str, values: dict) -> None:
@@ -393,6 +447,16 @@ class NGSync(commands.Cog):
     async def run_sync(self, guild: discord.Guild, st: GuildNG) -> None:
         members = await st.members(max_age=0)
         self.bot.dispatch("ng_country_update", guild.id, st.country_name, members)  # ex. le plugin Salons compteurs
+        online_now: set[str] | None = None
+        try:
+            online_now = await st.api.online()
+            online = insights.online_members(members, online_now)
+            self.bot.dispatch("ng_online_update", guild.id, st.country_name, len(online))
+            await self.record_online_peak(guild.id, st, len(online))
+        except ServiceError as e:
+            if st.should_warn(f"enligne:{e}"):
+                log.info("%s : joueurs en ligne pas lus (%s)", guild.name, e)
+        await self.sync_special_roles(guild, st, members, online_now)
         if st.announce_channel_id:
             await self.announce_country_changes(guild, st, members)
         checked, changed, errors = await self.sync_all(guild, st, members)
@@ -418,21 +482,45 @@ class NGSync(commands.Cog):
             st = self.state(guild.id)
             if st is None or now < st.paused_until:
                 continue
-            try:
-                if now - st.last_sync >= st.interval * 60:
-                    st.last_sync = now
-                    await self.run_sync(guild, st)
-                if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
-                    st.last_status = now
-                    await self.run_status(guild, st)
-            except ServiceError as e:
-                self.set_status(guild.id, self.status_for_error(e))
-                if getattr(e, "status", None) in (401, 403) or not self.api_key():
-                    st.paused_until = now + KEY_PAUSE  # rien à faire tant que la clé est pas réglée
-                if st.should_warn(str(e)):
-                    log.warning("%s : synchro NG impossible (%s)", guild.name, e)
-            except Exception:
-                log.exception("Erreur inattendue dans la synchro NG de %s", guild.name)
+            steps = []
+            if now - st.last_sync >= st.interval * 60:
+                st.last_sync = now
+                steps.append(("synchro", self.run_sync))
+            if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
+                st.last_status = now
+                steps.append(("stats", self.run_status))
+            if st.war_channel_id and now - st.last_alerts >= ALERTS_EVERY:
+                st.last_alerts = now
+                steps.append(("alertes", self.run_alerts))
+            if st.warzone_channel_id and now - st.last_warzone >= WARZONE_EVERY:
+                st.last_warzone = now
+                steps.append(("warzone", self.run_warzone))
+            if st.report_channel_id and self.report_due(st):
+                steps.append(("rapport", self.run_report))
+            if st.forum_channel_id and now - st.last_forum >= FORUM_EVERY:
+                st.last_forum = now
+                steps.append(("forum", self.run_forum))
+            if st.market_channel_id and now - st.last_market >= MARKET_EVERY:
+                st.last_market = now
+                steps.append(("marché", self.run_market))
+            if st.track_activity:
+                steps.append(("activité", lambda g, s: self.check_activity(s)))
+            for name, step in steps:  # une étape qui plante empêche pas les autres
+                if time.monotonic() < st.paused_until:
+                    break
+                try:
+                    await step(guild, st)
+                except ServiceError as e:
+                    self.set_status(guild.id, self.status_for_error(e))
+                    if getattr(e, "status", None) in (401, 403) or not self.api_key():
+                        st.paused_until = time.monotonic() + KEY_PAUSE  # rien à faire tant que la clé est pas réglée
+                    if st.should_warn(str(e)):
+                        log.warning("%s : NationsGlory (%s) impossible (%s)", guild.name, name, e)
+                except discord.HTTPException as e:
+                    if st.should_warn(f"{name}:{e}"):
+                        log.warning("%s : Discord a refusé (%s : %s)", guild.name, name, e)
+                except Exception:
+                    log.exception("Erreur inattendue (%s) dans NationsGlory pour %s", name, guild.name)
 
     @tick.before_loop
     async def _before_tick(self) -> None:
@@ -540,9 +628,176 @@ class NGSync(commands.Cog):
             return
         cid = await st.country()
         members = await st.members(max_age=120)
-        card = await st.api.get_country(cid) or {}
+        card = await st.api.get_country(cid, max_age=120) or {}
         embed = build_stats_embed(st.api.server, st.country_name, card, members)
+        extra = []
+        try:
+            extra.append(f"🟢 En ligne : {len(insights.online_members(members, await st.api.online()))}")
+            wars = await st.api.wars(cid)
+            active = sum(1 for w in wars if w.get("status") == "in_progress")
+            pending = sum(1 for w in wars if w.get("status") == "negotiation")
+            extra.append(f"⚔️ Guerres en cours : {active}" + (f" (+{pending} en négociation)" if pending else ""))
+        except ServiceError:
+            pass
+        level = alerts.power_level(card, 0)
+        if level == alerts.POWER_UNDER:
+            extra.append("🚨 **Sous le power : attaquable!**")
+        if extra:
+            embed.add_field(name="En ce moment", value="\n".join(extra), inline=False)
         await self._edit_or_send(channel, f"stats_message:{channel.id}", embed=embed)
+
+    # ---- Guerres, power et warzone ------------------------------------------------------------
+    async def _load(self, key: str):
+        raw = await self.store.get_value(key)
+        return json.loads(raw) if raw else None
+
+    async def _save(self, key: str, value) -> None:
+        await self.store.set_value(key, json.dumps(value))
+
+    async def collect_alerts(self, guild: discord.Guild, st: GuildNG) -> tuple[list[str], bool]:
+        """Compare l'état du pays au tour d'avant. Retourne (lignes à publier, mentionner le rôle?)."""
+        cid = await st.country()
+        lines: list[str] = []
+        important = False
+
+        # Guerres du pays : déclarations, débuts, fins, assauts
+        wars = await st.api.wars(cid)
+        key = f"ng_guerres:{guild.id}"
+        saved = await self._load(key)
+        previous = saved.get("statuts") if isinstance(saved, dict) else None
+        seen_assaults: dict = (saved or {}).get("assauts", {}) if isinstance(saved, dict) else {}
+        for event in alerts.war_events(previous, wars, cid):
+            lines.append(alerts.war_line(event, cid))
+            important |= event.important
+        new_assaults: dict[str, int] = {}
+        if st.announce_assaults:
+            for w in wars:
+                if w.get("status") != "in_progress":
+                    continue
+                wid = str(w["war_id"])
+                detail = await st.api.war(int(wid))
+                if detail is None:
+                    continue
+                known = seen_assaults.get(wid)
+                if known is None and previous is not None and previous.get(wid) in (None, "negotiation"):
+                    known = 0  # guerre qui vient de commencer : tous ses assauts sont nouveaux
+                # sinon (premier tour, option qu'on vient d'activer) : on prend note sans annoncer
+                events, new_assaults[wid] = alerts.assault_events(detail, known, cid)
+                lines += [alerts.war_line(e, cid) for e in events]
+        await self._save(key, {"statuts": alerts.war_snapshot(wars), "assauts": new_assaults})
+
+        # Power du pays et ennemis attaquables
+        card = await st.api.get_country(cid, max_age=120) or {}
+        if st.power_alert:
+            key = f"ng_power:{guild.id}"
+            previous_level = await self.store.get_value(key)
+            level = alerts.power_level(card, st.power_margin)
+            message, mention = alerts.power_alert(previous_level, level, card, st.country_name)
+            if message:
+                lines.append(message)
+                important |= mention
+            if level:
+                await self.store.set_value(key, level)
+        if st.enemy_alert:
+            enemies = [e for e in ((card.get("relations") or {}).get("enemies") or []) if isinstance(e, str)]
+            key = f"ng_ennemis:{guild.id}"
+            previous_ids = await self._load(key)
+            now_attackable = alerts.attackable_enemies(enemies, await st.api.countries(max_age=300)) if enemies else {}
+            enemy_lines = alerts.enemy_lines(previous_ids, now_attackable)
+            lines += enemy_lines
+            important |= bool(enemy_lines)
+            await self._save(key, sorted(now_attackable))
+        if st.diplomacy_alert or st.watchlist:
+            more, grave = await self.diplomacy_and_watch(guild, st, card)
+            lines += more
+            important |= grave
+        return lines, important
+
+    async def run_alerts(self, guild: discord.Guild, st: GuildNG) -> list[str]:
+        lines, important = await self.collect_alerts(guild, st)
+        if not lines:
+            return []
+        channel = self._channel(guild, st.war_channel_id, st, "guerres et alertes")
+        if channel is None:
+            return lines
+        if len(lines) > 15:
+            lines = lines[:15] + [f"… et {len(lines) - 15} autres."]
+        text = "\n".join(lines)
+        roles = []
+        if important and st.alert_role_id:
+            text = f"<@&{st.alert_role_id}>\n{text}"
+            roles = [discord.Object(st.alert_role_id)]
+        await channel.send(truncate(text, 2000), allowed_mentions=discord.AllowedMentions(roles=roles, users=False, everyone=False))
+        return lines
+
+    async def run_warzone(self, guild: discord.Guild, st: GuildNG) -> bool:
+        """Publie le classement warzone quand une journée (ou une semaine, le dimanche) est close à 20 h, heure de Paris."""
+        posted = await self._post_warzone(guild, st, "daily")
+        if st.warzone_weekly:
+            posted |= await self._post_warzone(guild, st, "weekly")
+        return posted
+
+    async def _post_warzone(self, guild: discord.Guild, st: GuildNG, period: str) -> bool:
+        cid = await st.country()
+        try:
+            rows = await st.api.warzone(period)
+        except NationsGloryError as e:
+            if e.status == 503:
+                return False  # pas encore de période close publiée sur ce serveur
+            raise
+        day, top, ours = alerts.warzone_summary(rows, cid)
+        key = f"ng_warzone{'' if period == 'daily' else '_semaine'}:{guild.id}"
+        if not day or await self.store.get_value(key) == day:
+            return False
+        channel = self._channel(guild, st.warzone_channel_id, st, "classement warzone")
+        if channel is None:
+            return False
+        if period == "daily":
+            title = f"🏁 Warzone du {day} · {st.api.server.capitalize()}"
+            footer = "Journée close à 20 h (heure de Paris) · API NationsGlory"
+        else:
+            start = rows[0].get("period_start") if rows else None
+            title = f"🏆 Warzone de la semaine{f' du {start}' if start else ''} au {day} · {st.api.server.capitalize()}"
+            footer = "Semaine close le dimanche à 20 h (heure de Paris) · API NationsGlory"
+        embed = discord.Embed(title=title, color=ORANGE if period == "daily" else 0xF1C40F, description="\n".join(top))
+        if ours:
+            embed.add_field(name=st.country_name, value=ours, inline=False)
+        elif not any(r.get("country_id") == cid for r in rows):
+            embed.add_field(name=st.country_name, value="Pas classé." , inline=False)
+        embed.set_footer(text=footer)
+        await channel.send(embed=embed)
+        await self.store.set_value(key, day)
+        return True
+
+    # ---- Activité des membres (dernière connexion) ---------------------------------------------
+    def _activity_key(self, st: GuildNG) -> str:
+        return f"ng_connexions:{st.api.server}:{st.country_id}"
+
+    async def _logins(self, st: GuildNG) -> dict[str, list]:
+        await st.country()
+        return await self._load(self._activity_key(st)) or {}
+
+    async def check_activity(self, st: GuildNG) -> str | None:
+        """Vérifie la dernière connexion d'UN membre (le plus vieux à vérifier). Partagé par pays :
+        deux serveurs Discord du même pays font pas deux fois le travail. Retourne le pseudo vérifié."""
+        cid = await st.country()
+        now = time.time()
+        tracker = (st.api.server, cid)
+        if now - self._last_activity.get(tracker, 0) < ACTIVITY_EVERY:
+            return None
+        self._last_activity[tracker] = now
+        members = await st.members(max_age=300)
+        logins = await self._logins(st)
+        for gone in set(logins) - set(members):
+            logins.pop(gone)  # parti du pays : on oublie
+        name = insights.next_to_check(members, logins, now, ACTIVITY_REFRESH)
+        if name is None:
+            await self._save(self._activity_key(st), logins)
+            return None
+        value = await st.api.last_login(name)
+        logins[name.lower()] = [value or "none", now]
+        await self._save(self._activity_key(st), logins)
+        return name
 
     # ---- Validation des liaisons ----------------------------------------------------------
     @staticmethod
@@ -698,77 +953,280 @@ class NGSync(commands.Cog):
             embed.add_field(name="Grade", value="*(NationsGlory injoignable)*")
         await reply(interaction, embed=embed)
 
-    @app_commands.command(name="pays", description="Le pays NationsGlory et ses membres par grade")
-    @app_commands.guild_only()
-    async def pays(self, interaction: discord.Interaction) -> None:
-        st = await self._st(interaction)
-        if st is None:
-            return
-        await interaction.response.defer()
-        country_id = await st.country()
-        members = await st.members()
-        country = await st.api.get_country(country_id) or {}
-
-        by_rank: dict[str, list[str]] = {r: [] for r in RANKS}
-        others: list[str] = []
-        for m in members.values():
-            (by_rank[m["role"]] if m["role"] in by_rank else others).append(m["username"])
+    async def _country_embed(self, st: GuildNG, cid: str, members: dict[str, dict]) -> tuple[discord.Embed, list[discord.File]]:
+        """Fiche d'un pays : stats, diplomatie, drapeau et membres par grade (noms de grades du pays)."""
+        country = await st.api.get_country(cid, max_age=60) or {}
+        names = {c.get("country_id"): c.get("name") for c in await st.api.countries()}
+        title = country.get("name") or (st.country_name if cid == st.country_id else cid)
+        custom = {k: v for k, v in (country.get("role_names") or {}).items() if isinstance(v, str) and v}
 
         embed = discord.Embed(
-            title=f"🏳️ {st.country_name}",
-            description=f"Serveur **{st.api.server}** · **{len(members)}** membres",
+            title=f"🏳️ {title}",
+            description=f"Serveur **{st.api.server.capitalize()}** · **{len(members)}** membres",
             color=BLUE,
         )
+        if desc := country.get("description"):
+            if desc.strip().lower() != "no description set":
+                embed.description += f"\n*{truncate(desc, 300)}*"
         fields = (
-            ("power", "Power"), ("power_max", "Power max"), ("claims", "Claims"),
-            ("bank", "Trésorerie"), ("mmr", "MMR"), ("level", "Niveau"),
+            ("power", "⚡ Power"), ("power_max", "Power max"), ("claims", "🗺️ Claims"),
+            ("bank_balance", "💰 Trésorerie"), ("score", "🏆 Score"), ("mmr", "🏅 MMR"), ("level", "Niveau"),
         )
         for key, label in fields:
             value = country.get(key)
             if isinstance(value, (int, float, str)) and not isinstance(value, bool):
                 text = fmt_int(value) if isinstance(value, int) else str(value)
-                embed.add_field(name=label, value=f"{text} $" if key == "bank" else text)
-        if isinstance(flag := country.get("flag"), str) and flag.startswith("/"):
-            embed.set_thumbnail(url=f"https://nationsglory.fr{flag}")
+                embed.add_field(name=label, value=f"{text} $" if key == "bank_balance" else text)
+        if isinstance(country.get("created_on"), str):
+            embed.add_field(name="📅 Fondé le", value=country["created_on"])
+        if alerts.power_level(country, 0) == alerts.POWER_UNDER:
+            embed.add_field(name="⚠️ Attention", value="Sous le power : le pays est attaquable!", inline=False)
+        if tags := [t for t in country.get("tags") or [] if isinstance(t, str)]:
+            embed.add_field(name="🏷️ Orientations", value=", ".join(tags), inline=False)
+        relations = country.get("relations") or {}
+        for key, label in (("allies", "🤝 Alliés"), ("enemies", "⚔️ Ennemis")):
+            ids = [i for i in relations.get(key) or [] if isinstance(i, str)]
+            if ids:
+                listed = sorted((names.get(i) or "?" for i in ids), key=str.lower)
+                embed.add_field(name=f"{label} ({len(ids)})", value=truncate(", ".join(listed)), inline=False)
+
+        by_rank: dict[str, list[str]] = {r: [] for r in RANKS}
+        others: list[str] = []
+        for m in members.values():
+            (by_rank[m["role"]] if m["role"] in by_rank else others).append(m["username"])
         for rank in RANKS:
-            names = sorted(by_rank[rank], key=str.lower)
-            if names:
-                embed.add_field(name=f"{rank_label(rank)} ({len(names)})", value=truncate(", ".join(names)), inline=False)
+            listed = sorted(by_rank[rank], key=str.lower)
+            if listed:
+                label = custom.get(rank) or rank_label(rank)
+                embed.add_field(name=f"{RANK_EMOJI[rank]} {label} ({len(listed)})", value=truncate(", ".join(listed)), inline=False)
         if others:
             embed.add_field(name=f"Autres ({len(others)})", value=truncate(", ".join(sorted(others, key=str.lower))), inline=False)
-        embed.set_footer(text="Données NationsGlory, mises à jour aux 5 minutes")
-        await reply(interaction, embed=embed, ephemeral=False)
 
-    @app_commands.command(name="joueur", description="Pays et grade d'un joueur NationsGlory")
-    @app_commands.describe(pseudo="Le pseudo NationsGlory")
+        files = []
+        try:
+            if png := await st.api.image(country.get("flag_sha256")):
+                files.append(discord.File(io.BytesIO(png), filename="drapeau.png"))
+                embed.set_thumbnail(url="attachment://drapeau.png")
+        except ServiceError:
+            pass  # pas de drapeau, c'est pas grave
+        embed.set_footer(text="Données NationsGlory, mises à jour aux 5 minutes")
+        return embed, files
+
+    @app_commands.command(name="pays", description="La fiche d'un pays NationsGlory (le tien par défaut)")
+    @app_commands.describe(nom="Un autre pays du même serveur (ex. Amour)")
     @app_commands.guild_only()
-    async def joueur(self, interaction: discord.Interaction, pseudo: Pseudo) -> None:
+    async def pays(self, interaction: discord.Interaction, nom: app_commands.Range[str, 1, 64] | None = None) -> None:
         st = await self._st(interaction)
         if st is None:
             return
-        pseudo = pseudo.strip()
-        if not NAME_RE.match(pseudo):
-            return await reply(interaction, "Pseudo invalide.")
-        await interaction.response.defer(ephemeral=True)
-        data = await st.api.get_player(pseudo)
+        await interaction.response.defer()
+        if nom and nom.strip().lower() != st.country_name.lower():
+            try:
+                cid, _ = await st.api.resolve_country(nom)
+            except NationsGloryError as e:
+                if e.status == 404:
+                    return await reply(interaction, f"Je trouve pas le pays **{nom}** sur {st.api.server.capitalize()}.")
+                raise
+            members = await st.api.country_members(cid)
+        else:
+            cid = await st.country()
+            members = await st.members()
+        embed, files = await self._country_embed(st, cid, members)
+        await interaction.followup.send(embed=embed, files=files)
+
+    @app_commands.command(name="enligne", description="Les membres du pays connectés sur NationsGlory")
+    @app_commands.guild_only()
+    async def enligne(self, interaction: discord.Interaction) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        members = await st.members()
+        online = await st.api.online()
+        here = insights.online_members(members, online)
+        custom = await self._role_names(st)
+        embed = discord.Embed(
+            title=f"🟢 {st.country_name} : {len(here)} en ligne",
+            description=f"{len(online)} joueurs connectés sur {st.api.server.capitalize()}",
+            color=GREEN if here else GREY,
+        )
+        for rank in RANKS:
+            listed = [m["username"] for m in here if m.get("role") == rank]
+            if listed:
+                embed.add_field(name=f"{RANK_EMOJI[rank]} {custom.get(rank) or rank_label(rank)}",
+                                value=truncate(", ".join(listed)), inline=False)
+        if not here:
+            embed.description += "\nPersonne du pays pour l'instant. 😴"
+        embed.set_footer(text="Liste des connectés mise à jour aux 5 minutes par NationsGlory")
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    async def _role_names(self, st: GuildNG) -> dict[str, str]:
+        """Noms de grades choisis par le pays (Empereur, Conseiller…), si la fiche les donne."""
+        try:
+            card = await st.api.get_country(await st.country(), max_age=300)
+        except ServiceError:
+            return {}
+        return {k: v for k, v in ((card or {}).get("role_names") or {}).items() if isinstance(v, str) and v}
+
+    @app_commands.command(name="classement-pays", description="Les pays du serveur NationsGlory classés")
+    @app_commands.describe(critere="Ce qu'on compare")
+    @app_commands.choices(critere=[app_commands.Choice(name=label, value=key)
+                                   for key, (_, label, _) in insights.RANKINGS.items()])
+    @app_commands.guild_only()
+    async def classement(self, interaction: discord.Interaction, critere: str = "power") -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        if critere not in insights.RANKINGS:
+            return await reply(interaction, "Critère inconnu.")
+        await interaction.response.defer()
+        cid = await st.country()
+        rows = insights.ranking(await st.api.countries(max_age=300), critere)
+        lines, ours = insights.ranking_lines(rows, critere, cid)
+        label = insights.RANKINGS[critere][1]
+        embed = discord.Embed(title=f"🏆 Classement {label} · {st.api.server.capitalize()}",
+                              description="\n".join(lines) or "Aucun pays.", color=ORANGE)
+        if ours:
+            embed.add_field(name=st.country_name, value=ours, inline=False)
+        embed.set_footer(text=f"{len(rows)} pays avec des membres · données NationsGlory")
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    @app_commands.command(name="guerre", description="Le détail d'une guerre : assauts, missiles, accords")
+    @app_commands.describe(numero="Le numéro de la guerre (dans /guerres)")
+    @app_commands.guild_only()
+    async def guerre(self, interaction: discord.Interaction, numero: app_commands.Range[int, 1, 10**9]) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        war = await st.api.war(numero)
+        if war is None:
+            return await reply(interaction, f"La guerre n°{numero} existe pas (ou est finie depuis plus de 30 jours).")
+        embed = discord.Embed(
+            title=f"⚔️ Guerre n°{numero} : {war.get('attacker_name')} contre {war.get('defender_name')}",
+            description=(f"{alerts.STATUS_LABELS.get(war.get('status'), war.get('status'))} · "
+                         f"motif : {alerts.reason_label(war.get('reason'))}"),
+            color=RED,
+        )
+        dates = [f"Déclarée le {war.get('declared_on')}"]
+        if war.get("started_on"):
+            dates.append(f"commencée le {war['started_on']}")
+        if war.get("ended_on"):
+            dates.append(f"finie le {war['ended_on']}")
+        embed.add_field(name="Dates", value=", ".join(dates), inline=False)
+        winner = war.get("winner")
+        if winner in ("attacker", "defender"):
+            embed.add_field(name="🏆 Vainqueur", value=war.get(f"{winner}_name") or "?", inline=False)
+        for name, value in insights.war_detail_lines(war, {}):
+            embed.add_field(name=name, value=truncate(value), inline=False)
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    @app_commands.command(name="alliance", description="L'alliance du pays (ou celle d'un autre pays)")
+    @app_commands.describe(pays="Un autre pays du même serveur")
+    @app_commands.guild_only()
+    async def alliance(self, interaction: discord.Interaction, pays: app_commands.Range[str, 1, 64] | None = None) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        if pays:
+            try:
+                cid, cname = await st.api.resolve_country(pays)
+            except NationsGloryError as e:
+                if e.status == 404:
+                    return await reply(interaction, f"Je trouve pas le pays **{pays}**.")
+                raise
+        else:
+            cid, cname = await st.country(), st.country_name
+        countries = await st.api.countries(max_age=300)
+        row = next((c for c in countries if c.get("country_id") == cid), {})
+        key = row.get("alliance_key")
+        data = await st.api.alliance(key) if key else None
         if data is None:
-            return await reply(interaction, f"Je trouve pas **{pseudo}** sur le serveur {st.api.server}.")
-        name = data.get("username") or pseudo
-        cid = data.get("country_id")
-        country = data.get("country_name") or data.get("country")
-        if not country and cid:
-            country = st.country_name if cid == st.country_id else cid
-        embed = discord.Embed(title=f"🎮 {name}", color=BLUE)
-        embed.set_thumbnail(url=head_url(name))
-        embed.add_field(name="Pays", value=str(country) if country else "Aucun")
-        if country:
-            embed.add_field(name="Grade", value=rank_label(data.get("role")))
-        if data.get("online") is not None:
-            embed.add_field(name="Statut", value="🟢 En ligne" if data["online"] else "⚫ Hors ligne")
-        if link := await self.store.get_link_by_name(interaction.guild.id, name):
-            embed.add_field(name="Discord", value=f"<@{link['discord_id']}>")
-        embed.set_footer(text=f"Serveur {st.api.server}")
+            return await reply(interaction, f"**{cname}** est dans aucune alliance.", ephemeral=False)
+        members = sorted((c.get("name") or "?" for c in countries if c.get("alliance_key") == key), key=str.lower)
+        embed = discord.Embed(title=f"🛡️ Alliance {data.get('name')}", color=BLUE)
+        if desc := data.get("description"):
+            embed.description = truncate(desc, 500)
+        for field, label in (("prestige_rank", "Rang de prestige"), ("prestige_points", "Prestige"),
+                             ("total_claims", "Claims"), ("bank", "Banque"), ("founded_on", "Fondée le")):
+            value = data.get(field)
+            if value is not None:
+                text = fmt_int(value) if isinstance(value, int) else str(value)
+                embed.add_field(name=label, value=f"{text} $" if field == "bank" else text)
+        embed.add_field(name="Candidatures", value="Ouvertes" if data.get("opened") else "Fermées")
+        if members:
+            embed.add_field(name=f"Pays ({len(members)})", value=truncate(", ".join(members)), inline=False)
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    @app_commands.command(name="inactifs", description="Les membres du pays pas connectés depuis X jours")
+    @app_commands.describe(jours="Depuis combien de jours (7 par défaut)")
+    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.guild_only()
+    async def inactifs(self, interaction: discord.Interaction, jours: app_commands.Range[int, 1, 90] = 7) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        members = await st.members()
+        logins = await self._logins(st)
+        report = insights.inactivity(members, logins, paris_today(), jours)
+        custom = await self._role_names(st)
+
+        def who(m: dict) -> str:
+            return f"{m['username']} ({custom.get(m.get('role')) or rank_label(m.get('role'))})"
+
+        embed = discord.Embed(title=f"😴 {st.country_name} : inactifs depuis {jours} jours ou plus", color=GREY)
+        lines = [f"{who(m)} · {n} j" for m, n in report["inactifs"]]
+        embed.description = truncate("\n".join(lines), 4000) or "Personne! Tout le monde est passé récemment. 💪"
+        if report["absents"]:
+            embed.add_field(name=f"Plus de {insights.MISSING_DAYS} jours ({len(report['absents'])})",
+                            value=truncate(", ".join(who(m) for m in report["absents"])), inline=False)
+        if report["prives"]:
+            embed.add_field(name=f"Profil privé ({len(report['prives'])})",
+                            value=truncate(", ".join(m["username"] for m in report["prives"])), inline=False)
+        missing = len(report["inconnus"])
+        footer = f"{report['verifies']}/{len(members)} membres vérifiés"
+        if missing:
+            footer += f" · les {missing} autres le seront dans les prochaines minutes"
+        embed.set_footer(text=footer + " · dernière connexion publiée par NationsGlory (au jour près)")
         await reply(interaction, embed=embed)
+
+    @app_commands.command(name="guerres", description="Les guerres du pays : en cours, en négociation et récentes")
+    @app_commands.guild_only()
+    async def guerres(self, interaction: discord.Interaction) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        cid = await st.country()
+        wars = await st.api.wars(cid)
+        embed = discord.Embed(title=f"⚔️ Guerres de {st.country_name}", color=RED)
+
+        def line(w: dict) -> str:
+            enemy = w.get("defender_name") if w.get("attacker_id") == cid else w.get("attacker_name")
+            side = "🗡️ attaque" if w.get("attacker_id") == cid else "🛡️ défend"
+            text = f"{side} contre {alerts.bold(enemy)} · {alerts.reason_label(w.get('reason'))} · depuis le {w.get('declared_on')}"
+            if w.get("status") == "finished":
+                winner = w.get("winner")
+                if winner in ("attacker", "defender"):
+                    won = (winner == "attacker") == (w.get("attacker_id") == cid)
+                    text += " · 🏆 gagnée" if won else " · 💀 perdue"
+                else:
+                    text += " · 🕊️ paix"
+            return text
+
+        for status in ("in_progress", "negotiation", "finished"):
+            rows = [w for w in wars if w.get("status") == status]
+            if rows:
+                shown = [line(w) for w in rows[:8]]
+                if len(rows) > 8:
+                    shown.append(f"… et {len(rows) - 8} autres")
+                embed.add_field(name=f"{alerts.STATUS_LABELS[status]} ({len(rows)})", value=truncate("\n".join(shown)), inline=False)
+        if not wars:
+            embed.description = "Aucune guerre en cours, et aucune finie dans les 30 derniers jours. 🕊️"
+        embed.set_footer(text="Données NationsGlory, mises à jour aux 10 minutes")
+        await reply(interaction, embed=embed, ephemeral=False)
 
     # ---- Commandes admin : /synchro ... -------------------------------------------------------
     @synchro.command(name="tout", description="Synchronise tous les comptes liés maintenant")

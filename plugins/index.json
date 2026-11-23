@@ -38,13 +38,13 @@
     {
       "id": "compteurs",
       "name": "Salons compteurs",
-      "version": "1.0.0",
-      "description": "Des salons vocaux qui se mettent à jour tout seuls : membres, humains, bots, boosts, membres du pays NationsGlory. /compteurs-creer les fait en un clic.",
+      "version": "1.1.0",
+      "description": "Des salons vocaux qui se mettent à jour tout seuls : membres, humains, bots, boosts, membres du pays NationsGlory et ceux en ligne. /compteurs-creer les fait en un clic.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/compteurs-1.0.0.zip",
-      "sha256": "ae6042234d84d79d506d2ade8c2949871cae2aa3dda56056986af159611ed274",
-      "size": 5121
+      "download": "dist/compteurs-1.1.0.zip",
+      "sha256": "37068790d2c2e08383692e14b05eb11917b4f1e7b3c347af18d67931b19ca9de",
+      "size": 5307
     },
     {
       "id": "evenements",
@@ -93,13 +93,13 @@
     {
       "id": "nationsglory",
       "name": "Synchro NationsGlory",
-      "version": "1.2.0",
-      "description": "Grades d'un pays NationsGlory ↔ rôles Discord, /lier avec validation par les officiers, annonces du pays et salon de stats. Utilise l'API officielle : une seule clé pour tous les serveurs.",
+      "version": "1.3.0",
+      "description": "Tout NationsGlory dans Discord : grades ↔ rôles, /lier, alertes de guerre, de power et de diplomatie, pays surveillés, rapport du jour, warzone, annonces officielles, marché, HDV, classements, historique, en ligne et inactifs. Une seule clé de l'API officielle pour tous les serveurs.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/nationsglory-1.2.0.zip",
-      "sha256": "492eb66533e3676b535d57bfc71629b86e1e20f3c7ddba2ab588566cb175244c",
-      "size": 21011
+      "download": "dist/nationsglory-1.3.0.zip",
+      "sha256": "c80d35e03c34c97440d29f8d88300872a082e440c8df10ae03271aaffb810e33",
+      "size": 53725
     },
     {
       "id": "niveaux",

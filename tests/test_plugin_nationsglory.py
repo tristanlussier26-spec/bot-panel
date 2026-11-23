@@ -79,9 +79,62 @@ MEMBERS = [{"country_id": AMOUR, "username": f"Joueur_{i}", "role": "MEMBER"} fo
     {"country_id": AMOUR, "username": "Tristan_QC", "role": "LEADER"},
     {"country_id": AMOUR, "username": "Bob", "role": "OFFICER"},
 ]
-COUNTRIES = [{"country_id": f"00000000-0000-0000-0000-{i:012d}", "name": f"Pays{i}"} for i in range(7)] + [
-    {"country_id": AMOUR, "name": "Amour", "power": 42, "level": 3}
+ENNEMI = "00000000-0000-0000-0000-000000000001"
+COUNTRIES = [{"country_id": f"00000000-0000-0000-0000-{i:012d}", "name": f"Pays{i}", "power": 500, "claims": 100}
+             for i in range(7)] + [
+    {"country_id": AMOUR, "name": "Amour", "power": 42, "level": 3, "claims": 30,
+     "relations": {"allies": ["00000000-0000-0000-0000-000000000002"], "enemies": [ENNEMI]}}
 ]
+# Mêmes formes que les vraies réponses de l'API (relevées sur Jade)
+WARS = [
+    {"war_id": 6780, "attacker_id": ENNEMI, "attacker_name": "Pays1", "defender_id": AMOUR, "defender_name": "Amour",
+     "status": "negotiation", "reason": "KILL_WILDERNESS", "declared_on": "2026-10-22", "started_on": None,
+     "ended_on": None, "winner": None},
+]
+WARZONE = [{"period_start": "2026-11-21", "period_end": "2026-11-22", "rank": i + 1,
+            "country_id": COUNTRIES[i]["country_id"], "country_name": COUNTRIES[i]["name"],
+            "total": 1000 - i, "boat": 0, "petrol": 0, "mine": 0} for i in range(8)]
+PNG = b"\x89PNG fake"
+WARZONE_WEEK = [{**r, "period_start": "2026-11-15"} for r in WARZONE]
+ONLINE = ["tristan_qc", "Bob", "Quelquun"]
+LOGINS = {"tristan_qc": "2026-11-22", "bob": "2026-11-01", "joueur_0": "private"}  # les autres : 404
+ALLIANCE = {"alliance_key": "b7f6c07bf21591d4", "name": "Hojo", "color": "red", "opened": True, "tags": [],
+            "founded_on": "2026-10-01", "prestige_points": 900, "prestige_rank": 1, "countries_count": 2,
+            "total_claims": 5000, "bank": 12345, "description": "La plus forte"}
+COUNTRIES[-1]["alliance_key"] = COUNTRIES[3]["alliance_key"] = ALLIANCE["alliance_key"]
+COUNTRIES[-1].update(members_count=7, score=999, role_names={"LEADER": "Empereur", "OFFICER": "Conseiller"})
+for _c in COUNTRIES[:7]:
+    _c["members_count"] = 3
+# Formes relevées dans l'extraction réelle de Jade (valeurs fictives)
+SERIES = [{"at": f"2026-11-{15 + i:02d}T00:00:00Z", "value": v, "min": v, "max": v}
+          for i, v in enumerate([30, 32, None, 35, 40, 38, 42])]
+MARKET = [{"cereal": "cereal_avoine", "price": 2000, "trend": "+"}, {"cereal": "cereal_ble", "price": 400, "trend": "-"}]
+MARKET_HISTORY = {"cereal": "cereal_ble", "price": 400, "trend": "-",
+                  "history": {"price": {"2026-11-20": 380, "2026-11-21": 390, "2026-11-22": 400},
+                              "sales": {"2026-11-22": 1200}, "stocks": {}}}
+HDV = [{"item": "264:0", "id": 264, "meta": 0, "name": "Diamant", "price_cents": 12800, "last_day_median_cents": 13000,
+        "change_bp": 250, "trades_7d": 40, "quantity_7d": 900, "value_7d": 115200, "last_trade_at": "2026-11-22T20:00:00Z",
+        "sell_listings": 3, "best_sell_cents": 12500, "buy_listings": 1, "best_buy_cents": 11000},
+       {"item": "57:0", "id": 57, "meta": 0, "name": "Bloc de diamant", "price_cents": 115000,
+        "last_day_median_cents": 116000, "change_bp": None}]
+LOTTERIES = [{"lottery_id": "p30", "state": "past", "starts_at": "2026-04-09T16:30:00Z", "ends_at": "2026-04-12T13:45:00Z",
+              "ticket_price": 5000, "cash_prize": 0, "item_prizes": [{"type_id": 16257, "damage": 0}], "tickets_sold": 51,
+              "winners_count": 1, "winners": ["Gagnant_1"]}]
+ENTERPRISES = [{"name": "AFR", "type": "farm", "owner": "Tristan_QC", "created_on": "2025-11-23", "is_open": True,
+                "members_count": 16, "contracts_done": 4, "contracts_success_pct": 75, "turnover": 132664, "bank_balance": 0},
+               {"name": "Autre", "type": "trader", "owner": "Inconnu_9", "is_open": False, "members_count": 2, "turnover": 5}]
+SKILLS = [{"as_of": "2026-11-22T21:09:34Z", "skill": "miner", "rank": i + 1, "username": u, "score": 1000 - i}
+          for i, u in enumerate(["Quelquun", "Bob", "Autre_2"])]
+PROFILE = {"username": "Bob", "face_url": "https://files.recube.gg/nationsglory/face/Bob.png", "description": None,
+           "verified": True, "online": False, "default_server": "jade", "first_join_on": "2025-01-02",
+           "playtime_total_minutes": 6000, "servers_played": 2, "achievement_points": 150,
+           "servers": [{"server": "jade", "online": False, "country_id": AMOUR, "country_name": "Amour", "role": "OFFICER",
+                        "last_login_on": "2026-11-01", "playtime_minutes": 3000, "grade": "VIP"},
+                       {"server": "blue", "online": False, "country_id": None, "country_name": None, "role": None}]}
+STATUS = [{"domain": "country", "state": "OK", "as_of": "2026-11-22T21:26:04Z"},
+          {"domain": "parcel", "state": "BROKEN", "as_of": None}]
+FORUM = {"categories": [{"id": 12, "slug": "annonces", "name": "Annonces"}],
+         "threads": [{"id": 100, "title": "Vieille annonce", "url": "https://nationsglory.fr/forum/thread/100", "author": "Staff"}]}
 
 
 def paginate(rows, request, page_size_max=3):
@@ -113,14 +166,111 @@ async def api_url(unused_tcp_port):
         return paginate(COUNTRIES, request)
 
     async def country(request):
-        if request.match_info["cid"] != AMOUR:
+        row = next((c for c in COUNTRIES if c["country_id"] == request.match_info["cid"]), None)
+        if row is None:
             return web.json_response({"status": 404}, status=404)
-        return web.json_response(COUNTRIES[-1])
+        return web.json_response(row)
 
     async def members(request):
-        if request.match_info["cid"] != AMOUR:
+        if request.match_info["cid"] not in {c["country_id"] for c in COUNTRIES}:
             return web.json_response({"status": 410}, status=410)
         return paginate(MEMBERS, request)
+
+    async def wars(request):
+        rows = [w for w in WARS if request.query.get("country") in (None, w["attacker_id"], w["defender_id"])]
+        return paginate(rows, request)
+
+    async def war(request):
+        wid = int(request.match_info["wid"])
+        w = next((w for w in WARS if w["war_id"] == wid), None)
+        if w is None:
+            return web.json_response({"status": 410}, status=410)
+        return web.json_response({"data": {**w, "assaults": w.get("assaults", [])}})
+
+    async def warzone(request):
+        return paginate(WARZONE, request)
+
+    async def image(request):
+        if request.match_info["sha"] != "a" * 64:
+            return web.json_response({"status": 404}, status=404)
+        return web.Response(body=PNG, content_type="image/png")
+
+    async def warzone_week(request):
+        return paginate(WARZONE_WEEK, request)
+
+    async def online(request):
+        return paginate([{"username": u} for u in ONLINE], request)
+
+    async def last_login(request):
+        name = request.match_info["name"]
+        value = LOGINS.get(name.lower())
+        if value == "private":
+            return web.json_response({"code": "profile_private", "status": 403}, status=403)
+        if value is None:
+            return web.json_response({"code": "player_not_found", "status": 404}, status=404)
+        return web.json_response({"data": {"username": name, "last_login_on": value}})
+
+    async def alliance(request):
+        if request.match_info["key"] != ALLIANCE["alliance_key"]:
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": ALLIANCE})
+
+    async def series(request):
+        if request.match_info["metric"] == "country.score" and request.query.get("range") not in ("90d", "1y"):
+            return web.json_response({"code": "validation_failed", "status": 422}, status=422)
+        return web.json_response({"data": {"metric": request.match_info["metric"], "subject": request.query.get("subject"),
+                                           "range": request.query.get("range"), "step_seconds": 3600, "points": SERIES}})
+
+    async def market(request):
+        return paginate(MARKET, request)
+
+    async def market_one(request):
+        if request.match_info["cereal"] != "cereal_ble":
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": MARKET_HISTORY})
+
+    async def hdv_items(request):
+        q = request.query.get("q", "").lower()
+        return web.json_response({"data": [r for r in HDV if q in r["name"].lower()][: int(request.query.get("limit", 25))]})
+
+    async def hdv_item(request):
+        row = next((r for r in HDV if r["item"] == request.match_info["item"]), None)
+        if row is None:
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": {**row, "week": {"trades": 40, "quantity": 900, "value": 115200},
+                                           "month": {"low_cents": 9000, "high_cents": 15000},
+                                           "book": {"sell": {"listings": 3, "unit_low_cents": 12500},
+                                                    "buy": {"listings": 1, "unit_high_cents": 11000}}}})
+
+    async def lotteries(request):
+        return paginate(LOTTERIES, request)
+
+    async def enterprises(request):
+        return paginate(ENTERPRISES, request)
+
+    async def warzone_live(request):
+        return paginate([{**r, "as_of": "2026-11-22T21:34:34Z"} for r in WARZONE], request)
+
+    async def skills(request):
+        return paginate(SKILLS, request)
+
+    async def profile(request):
+        if request.match_info["name"].lower() == "cache":
+            return web.json_response({"code": "profile_private", "status": 403}, status=403)
+        if request.match_info["name"].lower() != "bob":
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": PROFILE})
+
+    async def status(request):
+        return web.json_response({"data": {"server": "jade", "domains": STATUS}})
+
+    async def forum_categories(request):
+        return web.json_response({"data": FORUM["categories"]})
+
+    async def forum_threads(request):
+        if request.match_info["cat"] != "12":
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": {"category": FORUM["categories"][0], "threads": FORUM["threads"]}})
 
     async def player(request):
         name = request.match_info["name"]
@@ -133,6 +283,27 @@ async def api_url(unused_tcp_port):
     app.router.add_get("/v1/servers/jade/countries/{cid}", country)
     app.router.add_get("/v1/servers/jade/countries/{cid}/members", members)
     app.router.add_get("/v1/servers/jade/players/{name}", player)
+    app.router.add_get("/v1/servers/jade/wars", wars)
+    app.router.add_get("/v1/servers/jade/wars/{wid}", war)
+    app.router.add_get("/v1/servers/jade/rankings/warzone/daily", warzone)
+    app.router.add_get("/v1/images/{sha}.png", image)
+    app.router.add_get("/v1/servers/jade/rankings/warzone/weekly", warzone_week)
+    app.router.add_get("/v1/servers/jade/online", online)
+    app.router.add_get("/v1/servers/jade/players/{name}/last-login", last_login)
+    app.router.add_get("/v1/servers/jade/alliances/{key}", alliance)
+    app.router.add_get("/v1/servers/jade/series/{metric}", series)
+    app.router.add_get("/v1/servers/jade/market", market)
+    app.router.add_get("/v1/servers/jade/market/{cereal}", market_one)
+    app.router.add_get("/v1/servers/jade/hdv/items", hdv_items)
+    app.router.add_get("/v1/servers/jade/hdv/items/{item}", hdv_item)
+    app.router.add_get("/v1/servers/jade/lotteries", lotteries)
+    app.router.add_get("/v1/servers/jade/enterprises", enterprises)
+    app.router.add_get("/v1/servers/jade/rankings/warzone/live", warzone_live)
+    app.router.add_get("/v1/servers/jade/rankings/skills/{period}", skills)
+    app.router.add_get("/v1/players/{name}", profile)
+    app.router.add_get("/v1/servers/jade/status", status)
+    app.router.add_get("/v1/forum/categories", forum_categories)
+    app.router.add_get("/v1/forum/categories/{cat}/threads", forum_threads)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", unused_tcp_port).start()
@@ -454,7 +625,7 @@ async def test_stats_and_announcements(host):
     fields = {f.name: f.value for f in embed.fields}
     assert embed.title == "📊 Amour · Jade"
     assert fields["Membres"] == "👥 **7** membres\n👑 Chef : 1\n⭐ Officier : 1\n🛡️ Membre : 5"
-    assert fields["Pays"] == "⚡ Power : 42\nNiveau : 3"
+    assert fields["Pays"] == "⚡ Power : 42\n🗺️ Claims : 30\n🏆 Score : 999\nNiveau : 3"
 
     before = {"bob": {"username": "Bob", "role": "RECRUIT"}, "zed": {"username": "Zed_", "role": "RECRUIT"}}
     assert await cog.announce_country_changes(guild, st, before) == []  # 1er tour : on prend note
@@ -509,8 +680,9 @@ async def test_without_key_waits_for_host(host):
 async def test_commands_are_registered(host):
     bot, cog, _ = host
     names = {c.qualified_name for c in bot.tree.walk_commands()}
-    assert {"lier", "delier", "compte", "pays", "joueur", "synchro tout", "synchro liste"} <= names
-    assert not names & {"enligne", "guerres"}  # pas dans l'API publique
+    assert {"lier", "delier", "compte", "pays", "joueur", "guerres", "guerre", "enligne", "classement-pays", "alliance",
+            "inactifs", "synchro tout", "synchro liste"} <= names
+    assert "classement" not in names  # celui du plugin Niveaux
     assert all(c.module.startswith("plugins.nationsglory") for c in bot.tree.get_commands())
 
 
@@ -523,3 +695,445 @@ async def test_concurrent_requests_share_the_limit(api_url):
     assert len(limiter.calls) == 3
     await a.close()
     await b.close()
+
+
+# ---------------------------------------------------------------- guerres, power, warzone
+from plugins.nationsglory import alerts  # noqa: E402
+
+
+def test_war_events_logic():
+    war = dict(WARS[0])
+    assert alerts.war_events(None, [war], AMOUR) == []  # 1er tour : on prend note
+    events = alerts.war_events({}, [war], AMOUR)
+    assert [e.kind for e in events] == ["declared"] and events[0].important  # on se fait attaquer
+    assert "nous déclare la guerre" in alerts.war_line(events[0], AMOUR) and "kill en wilderness" in alerts.war_line(events[0], AMOUR)
+    snap = alerts.war_snapshot([war])
+    started = {**war, "status": "in_progress"}
+    assert [e.kind for e in alerts.war_events(snap, [started], AMOUR)] == ["started"]
+    ended = {**war, "status": "finished", "winner": "defender"}
+    events = alerts.war_events(alerts.war_snapshot([started]), [ended], AMOUR)
+    assert alerts.war_line(events[0], AMOUR).startswith("🏆 Victoire")
+    assert alerts.war_line(alerts.war_events({}, [{**ended, "winner": None}], AMOUR) or
+                           alerts.war_events(snap, [{**ended, "winner": None}], AMOUR)[0], AMOUR).startswith("🕊️")
+    assert alerts.war_events({}, [ended], AMOUR) == []  # finie avant qu'on la voie
+
+
+def test_assault_events_logic():
+    war = {**WARS[0], "status": "in_progress", "assaults": [{"on": "d", "winner": "attacker"}, {"on": "d", "winner": "defender"}]}
+    assert alerts.assault_events(war, None, AMOUR) == ([], 2)
+    events, n = alerts.assault_events(war, 0, AMOUR)
+    assert n == 2 and [alerts.war_line(e, AMOUR)[:1] for e in events] == ["❌", "✅"]  # on défend
+
+
+def test_power_logic():
+    assert alerts.power_level({"power": 99, "claims": 100}, 50) == "sous"
+    assert alerts.power_level({"power": 120, "claims": 100}, 50) == "bas"
+    assert alerts.power_level({"power": 200, "claims": 100}, 50) == "ok"
+    assert alerts.power_level({"power": None, "claims": 100}, 50) is None
+    card = {"power": 99, "claims": 100}
+    assert alerts.power_alert(None, "sous", card, "Amour") == (None, False)  # 1er tour
+    msg, mention = alerts.power_alert("ok", "sous", card, "Amour")
+    assert "sous le power" in msg and mention
+    assert alerts.power_alert("ok", "bas", card, "Amour")[0].startswith("⚠️")
+    assert alerts.power_alert("bas", "ok", card, "Amour")[0].startswith("✅")
+    assert alerts.power_alert("bas", "bas", card, "Amour") == (None, False)
+    rows = [{"country_id": "x", "name": "X", "power": 5, "claims": 9}, {"country_id": "y", "name": "Y", "power": 9, "claims": 5}]
+    now = alerts.attackable_enemies(["x", "y"], rows)
+    assert list(now) == ["x"] and alerts.enemy_lines(None, now) == [] and alerts.enemy_lines(["x"], now) == []
+    assert "**X**" in alerts.enemy_lines([], now)[0]
+
+
+def test_warzone_summary():
+    day, top, ours = alerts.warzone_summary(WARZONE, AMOUR, top=3)
+    assert day == "2026-11-22" and top[0].startswith("🥇") and len(top) == 3
+    assert ours.startswith("`8.`") and "__**Amour**__" in ours  # hors du top : ajouté à part
+    assert alerts.warzone_summary(WARZONE, "pas-classé", top=3)[2] is None
+    assert alerts.warzone_summary(WARZONE, AMOUR)[2] is None  # dans le top 10
+    assert alerts.warzone_summary([], AMOUR) == (None, [], None)
+
+
+async def test_alerts_in_bot(host):
+    bot, cog, calls = host
+    await bot.configure(555, {"active": True, "serveur": "jade", "pays": "Amour", "grades": GRADES,
+                              "salon_guerres_id": 80, "role_alerte_id": 81, "salon_warzone_id": 82, "marge_power": 20})
+    st = cog.state(555)
+    guild, _ = fake_guild(555)
+    chan = SimpleNamespace(id=80, send=AsyncMock())
+    wz = SimpleNamespace(id=82, send=AsyncMock())
+    guild.channels.update({80: chan, 82: wz})
+
+    saved_wars = list(WARS)
+    WARS.clear()  # pas de guerre au 1er tour
+    try:
+        assert await cog.run_alerts(guild, st) == []  # 1er tour : on prend note, rien à publier
+        assert await cog.store.get_value("ng_power:555") == "bas"  # power 42, claims 30, marge 20
+
+        # Une guerre nous est déclarée et un ennemi passe sous le power
+        WARS.extend(saved_wars)
+        COUNTRIES[1]["power"] = 10
+        for c in cog.clients.values():
+            c._cached.clear()
+            c._countries = None
+        lines = await cog.run_alerts(guild, st)
+    finally:
+        COUNTRIES[1]["power"] = 500
+        WARS[:] = saved_wars
+    assert any("nous déclare la guerre" in x for x in lines) and any("Pays1" in x and "attaquer" in x for x in lines)
+    sent = chan.send.call_args
+    assert sent.args[0].startswith("<@&81>") and sent.kwargs["allowed_mentions"].roles[0].id == 81
+
+    # Warzone : publié une fois par journée close
+    assert await cog.run_warzone(guild, st) and not await cog.run_warzone(guild, st)
+    embed = wz.send.call_args_list[0].kwargs["embed"]
+    assert embed.title == "🏁 Warzone du 2026-11-22 · Jade" and "__**Amour**__" in embed.description
+
+    # Drapeau : la clé est exigée, le bot le télécharge
+    api = st.api
+    assert await api.image("a" * 64) == PNG and await api.image("pas-un-sha") is None
+    n = len(calls)
+    await api.image("a" * 64)
+    assert len(calls) == n  # en cache
+
+
+
+# ---------------------------------------------------------------- classements, en ligne, activité
+from datetime import date  # noqa: E402
+
+from plugins.nationsglory import insights  # noqa: E402
+
+
+def test_ranking_logic():
+    rows = insights.ranking(COUNTRIES + [{"country_id": "w", "name": "Wilderness", "power": 999999, "members_count": 0}], "power")
+    assert rows[0]["name"] == "Pays0" and all(r["name"] != "Wilderness" for r in rows)  # pays vides écartés
+    lines, ours = insights.ranking_lines(rows, "power", AMOUR, top=3)
+    assert len(lines) == 3 and lines[0].startswith("🥇") and ours.startswith("`8.`") and "__**Amour**__" in ours
+    lines, ours = insights.ranking_lines(insights.ranking(COUNTRIES, "banque"), "banque", AMOUR)
+    assert lines == [] and ours is None  # personne a de banque dans ces données
+
+
+def test_online_and_inactivity_logic():
+    members = {"a": {"username": "A", "role": "RECRUIT"}, "b": {"username": "B", "role": "LEADER"},
+               "c": {"username": "C", "role": "MEMBER"}, "d": {"username": "D", "role": "MEMBER"}, "e": {"username": "E"}}
+    assert [m["username"] for m in insights.online_members(members, {"a", "b", "zz"})] == ["B", "A"]
+    logins = {"a": ["2026-11-01", 0], "b": ["2026-11-21", 0], "c": ["none", 0], "d": ["private", 0]}
+    report = insights.inactivity(members, logins, date(2026, 11, 22), 7)
+    assert [(m["username"], n) for m, n in report["inactifs"]] == [("A", 21)]
+    assert [m["username"] for m in report["absents"]] == ["C"] and [m["username"] for m in report["prives"]] == ["D"]
+    assert [m["username"] for m in report["inconnus"]] == ["E"] and report["verifies"] == 4
+    assert insights.next_to_check(members, logins, 100.0, 50) == "E"  # jamais vérifié d'abord
+    logins["e"] = ["2026-11-22", 90.0]
+    assert insights.next_to_check(members, logins, 100.0, 50) == "A"  # puis le plus vieux
+    assert insights.next_to_check(members, {k: [v, 99.0] for k, v in logins.items()}, 100.0, 50) is None
+
+
+def test_war_detail_lines():
+    war = {**WARS[0], "assaults": [{"winner": "attacker"}, {"winner": "attacker"}, {"winner": "defender"}],
+           "missiles": {"attacker": {"Conventional": 4, "Nuclear": 1}, "defender": {}},
+           "agreements_signed": [{"type": "peace", "signed_on": "2026-10-30", "duration_days": 7, "status": "active"}]}
+    fields = dict(insights.war_detail_lines(war, {}))
+    assert fields["Assauts"] == "🗡️ Pays1 : 2 · 🛡️ Amour : 1"
+    assert fields["Missiles"] == "**Pays1** : 4× Conventional, 1× Nuclear" and "peace" in fields["Accords"]
+
+
+async def _setup_guild(bot, cog, extra=None):
+    await bot.configure(555, {"active": True, "serveur": "jade", "pays": "Amour", "grades": GRADES, **(extra or {})})
+    guild, _ = fake_guild(555)
+    return cog.state(555), guild
+
+
+def said(i):
+    call = i.followup.send.call_args
+    return call.kwargs.get("embed") or call.kwargs.get("content")
+
+
+async def test_consultation_commands(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog)
+    user = add_member(guild, 42)
+
+    i = inter(guild, user)
+    await cog.enligne.callback(cog, i)
+    embed = said(i)
+    assert embed.title == "🟢 Amour : 2 en ligne" and "3 joueurs connectés" in embed.description
+    assert [f.name for f in embed.fields] == ["👑 Empereur", "⭐ Conseiller"]  # noms de grades du pays
+
+    i = inter(guild, user)
+    await cog.classement.callback(cog, i, "score")
+    embed = said(i)
+    assert embed.title == "🏆 Classement Score · Jade" and embed.description.startswith("🥇 __**Amour**__ · 999")
+
+    i = inter(guild, user)
+    await cog.pays.callback(cog, i, "pays3")
+    embed = i.followup.send.call_args.kwargs["embed"]
+    assert embed.title == "🏳️ Pays3" and "**7** membres" in embed.description  # même faux membres
+    i = inter(guild, user)
+    await cog.pays.callback(cog, i, "Atlantide")
+    assert "trouve pas le pays" in said(i)
+    i = inter(guild, user)
+    await cog.pays.callback(cog, i, None)
+    embed = i.followup.send.call_args.kwargs["embed"]
+    names = [f.name for f in embed.fields]
+    assert embed.title == "🏳️ Amour" and "👑 Empereur (1)" in names and "⚔️ Ennemis (1)" in names
+
+    i = inter(guild, user)
+    await cog.guerre.callback(cog, i, 6780)
+    assert said(i).title == "⚔️ Guerre n°6780 : Pays1 contre Amour"
+    i = inter(guild, user)
+    await cog.guerre.callback(cog, i, 1)
+    assert "existe pas" in said(i)
+
+    i = inter(guild, user)
+    await cog.alliance.callback(cog, i, None)
+    embed = said(i)
+    assert embed.title == "🛡️ Alliance Hojo" and {"Pays (2)", "Banque", "Candidatures"} <= {f.name for f in embed.fields}
+    i = inter(guild, user)
+    await cog.alliance.callback(cog, i, "Pays5")
+    assert "aucune alliance" in said(i)
+
+
+async def test_activity_sweep_and_inactifs(host, monkeypatch):
+    bot, cog, calls = host
+    st, guild = await _setup_guild(bot, cog)
+    monkeypatch.setattr(sys.modules["plugins.nationsglory.cog"], "paris_today", lambda: date(2026, 11, 22))
+    checked = []
+    for _ in range(9):
+        cog._last_activity.clear()  # pas besoin d'attendre 30 s entre deux vérifications
+        checked.append(await cog.check_activity(st))
+    assert sorted(n for n in checked if n) == sorted(m["username"] for m in MEMBERS) and checked[-2:] == [None, None]
+    n = len(calls)
+    assert await cog.check_activity(st) is None and len(calls) == n  # moins de 30 s : rien
+
+    i = inter(guild, add_member(guild, 42))
+    await cog.inactifs.callback(cog, i, 7)
+    embed = said(i)
+    assert embed.description == "Bob (Conseiller) · 21 j"
+    fields = {f.name: f.value for f in embed.fields}
+    assert fields["Profil privé (1)"] == "Joueur_0" and fields["Plus de 90 jours (4)"].count("Joueur_") == 4
+    assert embed.footer.text.startswith("7/7 membres vérifiés")
+    # Un 403 « profil privé » doit pas mettre le bot en pause comme une clé refusée
+    assert st.paused_until == 0
+
+
+async def test_weekly_warzone_and_stats_extras(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_warzone_id": 82, "salon_stats_id": 666})
+    wz = SimpleNamespace(id=82, send=AsyncMock())
+    sent = []
+
+    async def send(**kw):
+        sent.append(kw)
+        return SimpleNamespace(id=1)
+
+    guild.channels.update({82: wz, 666: SimpleNamespace(id=666, send=send, get_partial_message=None)})
+    assert await cog.run_warzone(guild, st)
+    titles = [c.kwargs["embed"].title for c in wz.send.call_args_list]
+    assert titles == ["🏁 Warzone du 2026-11-22 · Jade", "🏆 Warzone de la semaine du 2026-11-15 au 2026-11-22 · Jade"]
+    assert not await cog.run_warzone(guild, st)
+    await cog.run_status(guild, st)
+    fields = {f.name: f.value for f in sent[0]["embed"].fields}
+    assert fields["En ce moment"] == "🟢 En ligne : 2\n⚔️ Guerres en cours : 0 (+1 en négociation)"
+
+
+async def test_online_dispatched_for_counters(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog)
+    seen = []
+    bot.dispatch = lambda name, *args: seen.append((name, args))
+    await cog.run_sync(guild, st)
+    assert ("ng_online_update", (555, "Amour", 2)) in seen
+
+
+# ---------------------------------------------------------------- veille : logique pure
+from plugins.nationsglory import veille  # noqa: E402
+
+
+def test_sparkline_and_series():
+    assert veille.sparkline([1, 2, None, 8]) == "▁▂ █"
+    assert veille.sparkline([5, 5]) == "▄▄" and veille.sparkline([None]) == ""
+    assert len(veille.compress(list(range(100)), 10)) == 10 and veille.compress([1, 2], 10) == [1, 2]
+    summary = veille.series_summary(SERIES)
+    assert summary["first"] == 30 and summary["last"] == 42 and summary["delta"] == 12 and summary["min"] == 30
+    assert veille.series_summary([{"value": None}]) is None
+    assert veille.signed(-1500, " $") == "−1 500 $" and veille.signed(0) == "="
+
+
+def test_diplomacy_logic():
+    names = {"a": "Alpha", "b": "Beta", "c": "Gamma"}
+    before = veille.relations_snapshot({"relations": {"allies": ["a"], "enemies": []}, "alliance_key": None})
+    after = veille.relations_snapshot({"relations": {"allies": ["b"], "enemies": ["c"]}, "colonies": ["a"],
+                                       "colonized_by": None, "alliance_key": "k1"})
+    assert veille.diplomacy_lines(None, after, names, {}) == []
+    lines = veille.diplomacy_lines(before, after, names, {"k1": "Hojo"})
+    assert lines == ["🤝 **Beta** devient notre allié.", "💔 **Alpha** est plus notre allié.",
+                     "⚔️ **Gamma** devient notre ennemi.", "🏴 **Alpha** devient notre colonie.",
+                     "🛡️ On rejoint l'alliance **Hojo**."]
+    colonised = dict(after, colonized_by="c")
+    assert "⛓️ On est maintenant une colonie de **Gamma**!" in veille.diplomacy_lines(after, colonised, names, {})
+
+
+def test_watchlist_logic():
+    watched, missing = veille.resolve_watchlist(["pays1", "Atlantide", "Amour"], COUNTRIES, AMOUR)
+    assert watched == {ENNEMI: "Pays1"} and missing == ["Atlantide"]  # son propre pays est ignoré
+    lines, state = veille.watch_power_lines(None, COUNTRIES, watched)
+    assert lines == [] and state == {ENNEMI: "ok"}
+    weak = [dict(c, power=1) if c["country_id"] == ENNEMI else c for c in COUNTRIES]
+    lines, state = veille.watch_power_lines(state, weak, watched)
+    assert "sous le power" in lines[0] and state[ENNEMI] == "sous"
+    lines, _ = veille.watch_power_lines(state, [c for c in COUNTRIES if c["country_id"] != ENNEMI], watched)
+    assert "disparu" in lines[0]
+    event = alerts.WarEvent("declared", WARS[0])
+    assert veille.neutral_war_line(event).startswith("👀 **Pays1** déclare la guerre à **Amour**")
+
+
+def test_forum_and_market_logic():
+    threads = [{"id": 3}, {"id": 1}, {"id": 2}]
+    assert veille.new_threads(None, threads) == [] and [t["id"] for t in veille.new_threads([1], threads)] == [2, 3]
+    lines, ref = veille.market_moves(None, MARKET, 10)
+    assert lines == [] and ref == {"cereal_avoine": 2000, "cereal_ble": 400}
+    lines, ref = veille.market_moves(ref, [{"cereal": "cereal_ble", "price": 460}, {"cereal": "cereal_avoine", "price": 2100}], 10)
+    assert lines == ["📈 **Blé** : 400 $ → 460 $ (+15 %)"] and ref["cereal_ble"] == 460 and ref["cereal_avoine"] == 2000
+    assert veille.cereal_name("cereal_mais") == "Maïs" and veille.cereal_name("wheat") == "Blé"
+
+
+def test_report_logic():
+    members = {m["username"].lower(): m for m in MEMBERS}
+    card = {"power": 42, "claims": 30, "bank_balance": 1000, "score": 999, "mmr": 5}
+    now = veille.report_snapshot(card, members, COUNTRIES, AMOUR)
+    assert now["members_count"] == 7 and now["ranks"]["power"] == 8
+    fields = dict(veille.report_fields(None, now))
+    assert "**42**" in fields["Le pays"] and "Mouvements" not in fields
+    before = dict(now, power=50, members=now["members"][1:] + ["Parti"], ranks={"power": 9, "score": 1, "members_count": 8})
+    fields = dict(veille.report_fields(before, now))
+    assert "⚡ Power : **42** (−8)" in fields["Le pays"] and "8e en power (⬆️ 1)" in fields["Classements"]
+    assert "Arrivées (1)" in fields["Mouvements"] and "Départs (1) : Parti" in fields["Mouvements"]
+
+
+# ---------------------------------------------------------------- veille dans le bot
+async def test_report_forum_market_in_bot(host, monkeypatch):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_rapport_id": 90, "salon_forum_id": 91, "salon_marche_id": 92,
+                                              "heure_rapport": 0, "seuil_marche": 10})
+    chans = {i: SimpleNamespace(id=i, send=AsyncMock()) for i in (90, 91, 92)}
+    guild.channels.update(chans)
+    assert cog.report_due(st)  # heure 0 : c'est l'heure
+    assert await cog.run_report(guild, st) and not await cog.run_report(guild, st)
+    embed = chans[90].send.call_args.kwargs["embed"]
+    assert embed.title == "📰 Rapport du jour · Amour" and "Premier rapport" in embed.description
+    names = [f.name for f in embed.fields]
+    assert names[:2] == ["Le pays", "Classements"] and "En bref" in names
+    st.last_report_day = None
+    assert not await cog.run_report(guild, st)  # déjà fait aujourd'hui (gardé en base, survit à un redémarrage)
+
+    assert await cog.run_forum(guild, st) == 0  # 1er tour : on prend note
+    FORUM["threads"].insert(0, {"id": 101, "title": "Mise à jour 2.0", "url": "https://x", "author": "Staff", "pinned": True})
+    for c in cog.clients.values():
+        c._cached.pop("forum:12:10", None)
+    try:
+        assert await cog.run_forum(guild, st) == 1
+    finally:
+        FORUM["threads"].pop(0)
+    assert chans[91].send.call_args.kwargs["embed"].title == "Mise à jour 2.0"
+
+    assert await cog.run_market(guild, st) == []
+    MARKET[1]["price"] = 500
+    for c in cog.clients.values():
+        c._cached.pop("market", None)
+    try:
+        lines = await cog.run_market(guild, st)
+    finally:
+        MARKET[1]["price"] = 400
+    assert lines == ["📈 **Blé** : 400 $ → 500 $ (+25 %)"] and chans[92].send.await_count == 1
+
+
+async def test_diplomacy_and_watchlist_in_bot(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_guerres_id": 80, "pays_surveilles": ["Pays3"], "alerte_power": False,
+                                              "alerte_ennemis": False, "annoncer_assauts": False})
+    guild.channels[80] = SimpleNamespace(id=80, send=AsyncMock())
+    assert await cog.run_alerts(guild, st) == []  # 1er tour
+    third = COUNTRIES[3]["country_id"]
+    saved = dict(COUNTRIES[-1]["relations"])
+    COUNTRIES[-1]["relations"] = {"allies": saved["allies"] + [third], "enemies": saved["enemies"]}
+    COUNTRIES[3]["power"] = 50
+    WARS.append({"war_id": 7000, "attacker_id": third, "attacker_name": "Pays3", "defender_id": COUNTRIES[4]["country_id"],
+                 "defender_name": "Pays4", "status": "negotiation", "reason": "SCAM", "declared_on": "2026-11-22"})
+    for c in cog.clients.values():
+        c._cached.clear()
+        c._countries = None
+    try:
+        lines = await cog.run_alerts(guild, st)
+    finally:
+        COUNTRIES[-1]["relations"] = saved
+        COUNTRIES[3]["power"] = 500
+        WARS.pop()
+    assert "🤝 **Pays3** devient notre allié." in lines
+    assert any("(surveillé) est **sous le power**" in x for x in lines)
+    assert "👀 **Pays3** déclare la guerre à **Pays4** (arnaque)." in lines
+
+
+async def test_ingame_and_inactive_roles(host):
+    bot, cog, _ = host
+    bad = {"ng": {"active": True, "serveur": "jade", "pays": "Amour", "grades": GRADES, "role_en_jeu_id": 3}}
+    assert "déjà utilisé pour un grade" in cog.validate_guild_config(bad)[0]
+    st, guild = await _setup_guild(bot, cog, {"role_en_jeu_id": 10, "role_inactif_id": 20, "jours_inactif": 14})
+    online = add_member(guild, 42)
+    away = add_member(guild, 43, [FakeRole(10, 10)])
+    await cog.store.add_link(555, 42, "Tristan_QC")
+    await cog.store.add_link(555, 43, "Joueur_1")
+    await st.country()
+    await cog._save(cog._activity_key(st), {"joueur_1": ["none", 0], "tristan_qc": ["2026-11-22", 0]})
+    await cog.run_sync(guild, st)
+    assert 10 in {r.id for r in online.roles} and 20 not in {r.id for r in online.roles}
+    assert 20 in {r.id for r in away.roles} and 10 not in {r.id for r in away.roles}  # hors ligne + inactif
+
+
+# ---------------------------------------------------------------- commandes d'infos
+async def test_info_commands(host):
+    bot, cog, _ = host
+    infos = bot.get_cog("NGInfos")
+    st, guild = await _setup_guild(bot, cog)
+    user = add_member(guild, 42)
+
+    async def run(command, *args):
+        i = inter(guild, user)
+        await command.callback(infos, i, *args)
+        return said(i)
+
+    embed = await run(infos.historique, "power", "7d", None)
+    assert embed.title == "📈 Power de Amour · 7 jours" and "+12" in [f.value for f in embed.fields][1]
+    embed = await run(infos.historique, "score", "24h", None)  # l'API veut 90d pour le score
+    assert embed.title.endswith("90 jours")
+    embed = await run(infos.comparer, "Pays3", None)
+    assert embed.title == "⚖️ Amour contre Pays3"
+    embed = await run(infos.joueur, "Bob")
+    fields = {f.name: f.value for f in embed.fields}
+    assert fields["Pays sur Jade"] == "Amour · Conseiller" and fields["Temps de jeu"] == "100 h" and fields["Grade boutique"] == "VIP"
+    embed = await run(infos.joueur, "Cache")
+    assert "Profil privé" in embed.description
+    embed = await run(infos.warzone)
+    assert "__**Amour**__" in embed.description and "Bateau" in embed.fields[0].value
+    embed = await run(infos.competences, None, False)
+    assert embed.fields[0].name == "Mineur (1)" and "**Bob** 2e" in embed.fields[0].value
+    embed = await run(infos.competences, "miner", True)
+    assert "**Bob** ⭐" in embed.description
+    embed = await run(infos.marche, None)
+    assert embed.description.splitlines()[0] == "📈 **Avoine** · 2 000 $"
+    embed = await run(infos.marche, "blé")
+    assert embed.title == "🌾 Blé · 400 $" and embed.fields[0].value == "+20 $"
+    assert "inconnue" in await run(infos.marche, "patate")
+    embed = await run(infos.hdv, "diamant")
+    fields = {f.name: f.value for f in embed.fields}
+    assert embed.title == "🏪 Diamant" and fields["Prix affiché"] == "130 $" and fields["Variation 7 j"] == "+2.5 %"
+    assert "Bloc de diamant" in fields["Autres résultats"]
+    assert "Aucun objet" in await run(infos.hdv, "licorne")
+    embed = await run(infos.loteries)
+    assert embed.fields[0].name == "Loterie p30" and "Gagnant_1" in embed.fields[0].value
+    embed = await run(infos.entreprises, None)
+    assert [f.name for f in embed.fields] == ["🟢 AFR"] and "132 664" in embed.description
+    i = inter(guild, user)
+    await infos.statut_ng.callback(infos, i)
+    assert "🔴 Parcelles" in said(i).description
+    i = inter(guild, user)
+    await infos.rapport.callback(infos, i)
+    assert said(i).title == "📰 Rapport du jour · Amour"
+    assert await cog.store.get_value("ng_rapport:555") is None  # un aperçu change pas le prochain rapport
