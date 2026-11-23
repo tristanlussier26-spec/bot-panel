@@ -5,13 +5,13 @@
     {
       "id": "adminbuild",
       "name": "Construction du serveur",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "/adminbuild crée les rôles, catégories et salons d'un serveur de pays NationsGlory, puis règle les autres plugins tout seul.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/adminbuild-1.0.0.zip",
-      "sha256": "cd0077ab05aed238f6f55aacde5d0f6027e9cc8237f7510c22f0d35809ba4e92",
-      "size": 9714
+      "download": "dist/adminbuild-1.0.1.zip",
+      "sha256": "b3eadd2bd42ccd4fad81f5518b237cf2d186b1c6c900d8f6f5e2afcb5da42791",
+      "size": 10118
     },
     {
       "id": "automod",

@@ -183,9 +183,12 @@ class Builder(commands.Cog):
 
     # ---- Plan --------------------------------------------------------------------------------------
     @staticmethod
-    def match(guild: discord.Guild, tpl: dict) -> dict:
+    def match(guild: discord.Guild, tpl: dict, bound: dict[str, int] | None = None) -> dict:
         """Ce qui existe déjà pour chaque élément du modèle (comparaison des noms sans emojis).
-        Un salon est cherché dans sa catégorie, puis ailleurs sur le serveur (il sera déplacé)."""
+        Un salon est cherché dans sa catégorie, puis ailleurs sur le serveur (il sera déplacé).
+        `bound` : les salons déjà réglés dans le bot ({"compteurs.salon_membres": id}). Un salon que le bot
+        utilise déjà est réutilisé même s'il a changé de nom (ex. un compteur « 👥 Membres : 46 »)."""
+        bound = bound or {}
         roles = {r.name.lower(): r for r in guild.roles}
         cats = {norm(c.name): c for c in guild.categories}
         used: set[int] = set()
@@ -199,17 +202,46 @@ class Builder(commands.Cog):
             for chi, ch in enumerate(c.get("channels") or []):
                 ch = {"name": ch} if isinstance(ch, str) else ch
                 kind, key = str(ch.get("type", "text")), norm(ch["name"])
-                pool = [x for x in others if x.id not in used and same_kind(x, kind) and norm(x.name) == key]
-                found = next((x for x in pool if cat is not None and x.category_id == cat.id), None) or next(iter(pool), None)
+                found = None
+                for path in ch.get("bind") or []:
+                    found = next((x for x in others if x.id == bound.get(str(path)) and x.id not in used
+                                  and same_kind(x, kind)), None)
+                    if found is not None:
+                        break
+                if found is None:
+                    pool = [x for x in others if x.id not in used and same_kind(x, kind) and norm(x.name) == key]
+                    found = next((x for x in pool if cat is not None and x.category_id == cat.id), None) or next(iter(pool), None)
                 if found is not None:
                     used.add(found.id)
                 result["channels"][(ci, chi)] = found
         result["extra"] = [x for x in others if x.id not in used]
         return result
 
+    @staticmethod
+    def managed_name(ch: dict) -> bool:
+        """Salon dont un plugin change le nom tout seul (compteurs) : on le renomme jamais."""
+        return any(str(b).startswith("compteurs.") for b in ch.get("bind") or [])
+
+    def bound(self, guild: discord.Guild, tpl: dict) -> dict[str, int]:
+        """Les salons du modèle déjà réglés dans le bot, par « bind »."""
+        out: dict[str, int] = {}
+        for c in tpl.get("categories") or []:
+            for ch in c.get("channels") or []:
+                ch = {"name": ch} if isinstance(ch, str) else ch
+                for path in ch.get("bind") or []:
+                    parts = str(path).split(".")
+                    if len(parts) == 2:
+                        try:
+                            value = int(self.host.config(guild.id, parts[0]).get(parts[1]) or 0)
+                        except (TypeError, ValueError):
+                            value = 0
+                        if value:
+                            out[str(path)] = value
+        return out
+
     @classmethod
-    def plan(cls, guild: discord.Guild, tpl: dict) -> dict:
-        m = cls.match(guild, tpl)
+    def plan(cls, guild: discord.Guild, tpl: dict, bound: dict[str, int] | None = None) -> dict:
+        m = cls.match(guild, tpl, bound)
         cats = tpl.get("categories") or []
         chans = [((ci, chi), {"name": ch} if isinstance(ch, str) else ch) for ci, c in enumerate(cats)
                  for chi, ch in enumerate(c.get("channels") or [])]
@@ -218,7 +250,7 @@ class Builder(commands.Cog):
         new_channels = [ch for key, ch in chans if m["channels"][key] is None]
         renamed = sum(1 for ci, c in enumerate(cats) if m["categories"][ci] is not None and m["categories"][ci].name != c["name"])
         renamed += sum(1 for key, ch in chans if m["channels"][key] is not None and (
-            m["channels"][key].name != cls.discord_name(ch) or m["channels"][key].category_id != getattr(m["categories"][key[0]], "id", None)))
+            (m["channels"][key].name != cls.discord_name(ch) and not cls.managed_name(ch)) or m["channels"][key].category_id != getattr(m["categories"][key[0]], "id", None)))
         kept = sum(1 for v in m["roles"].values() if v) + sum(1 for v in m["categories"].values() if v) + \
             sum(1 for v in m["channels"].values() if v)
         return {"roles": new_roles, "categories": new_cats, "channels": new_channels, "kept": kept,
@@ -260,7 +292,7 @@ class Builder(commands.Cog):
             await interaction.response.send_message(f"❌ {e}", ephemeral=True)
             return
 
-        p = self.plan(guild, tpl)
+        p = self.plan(guild, tpl, self.bound(guild, tpl))
         lines = [
             f"**{len(p['roles'])}** rôle(s), **{len(p['categories'])}** catégorie(s) et **{len(p['channels'])}** salon(s) à créer.",
             f"{p['kept']} élément(s) existent déjà : je les réutilise.",
@@ -297,7 +329,7 @@ class Builder(commands.Cog):
             embed.add_field(name="Bot réglé", value=", ".join(configured)[:1000], inline=False)
         if errors:
             embed.add_field(name="Erreurs", value="\n".join(errors)[:1000], inline=False)
-        extra = self.match(guild, tpl)["extra"]
+        extra = self.match(guild, tpl, self.bound(guild, tpl))["extra"]
         if extra:
             names = ", ".join(f"#{c.name}" if not isinstance(c, discord.VoiceChannel) else f"🔊 {c.name}" for c in extra[:20])
             embed.add_field(name="Pas dans le modèle (gardés : supprime-les si tu en veux plus)", value=names[:1000], inline=False)
@@ -311,7 +343,7 @@ class Builder(commands.Cog):
         created = {"roles": 0, "categories": 0, "channels": 0, "renamed": 0}
         binds: dict[str, int] = {}
         errors: list[str] = []
-        m = self.match(guild, tpl)
+        m = self.match(guild, tpl, self.bound(guild, tpl))
         roles = {r.name.lower(): r for r in guild.roles}
 
         def bind(item: dict, obj_id: int) -> None:
@@ -391,7 +423,7 @@ class Builder(commands.Cog):
                         created["channels"] += 1
                     elif reorganize:
                         changes: dict[str, Any] = {}
-                        if channel.name != self.discord_name(ch):
+                        if channel.name != self.discord_name(ch) and not self.managed_name(ch):
                             changes["name"] = ch_name
                         if channel.category_id != category.id:
                             changes.update(category=category, sync_permissions=True)

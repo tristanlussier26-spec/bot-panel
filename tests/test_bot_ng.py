@@ -275,6 +275,25 @@ async def test_adminbuild_configures_installed_plugins(tmp_path):
         assert bot.cfg(555, "ng")["pays"] == "Amour" and bot.cfg(555, "ng")["grades"]["MEMBER"] == 1
 
 
+async def test_adminbuild_keeps_renamed_counters(tmp_path):
+    """Les compteurs se renomment tout seuls (« 👥 Membres : 46 ») : un 2e /adminbuild doit pas les recréer."""
+    async with ng_bot(tmp_path, "adminbuild", "compteurs") as bot:
+        cog = bot.get_cog("Builder")
+        tpl = {"categories": [{"name": "📊 Statistiques", "channels": [
+            {"name": "👥 Membres", "type": "voice", "bind": ["compteurs.salon_membres"]}]}]}
+        guild = FakeGuild()
+        created, binds, errors = await cog.build(guild, tpl, SimpleNamespace(user="Tristan"))
+        assert created["channels"] == 1 and errors == []
+        await cog.configure(guild, binds, None, "jade", True, [])
+        counter = guild.created_channels[0]
+        counter.name = "👥 Membres : 46"  # renommé par le plugin Salons compteurs
+        plan = cog.plan(guild, tpl, cog.bound(guild, tpl))
+        assert plan["channels"] == [] and plan["renamed"] == 0
+        created, binds, _ = await cog.build(guild, tpl, SimpleNamespace(user="Tristan"))
+        assert created["channels"] == 0 and created["renamed"] == 0 and counter.name == "👥 Membres : 46"
+        assert binds["compteurs.salon_membres"] == counter.id
+
+
 # ---------------------------------------------------------------- pont avec Bot Panel
 async def test_panel_bridge_with_plugins(tmp_path, monkeypatch):
     from botng.panelbridge import PanelBridge, schema
