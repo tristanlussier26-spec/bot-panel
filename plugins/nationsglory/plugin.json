@@ -2,7 +2,7 @@
   "format": 1,
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Tout NationsGlory dans Discord : grades ↔ rôles avec liaison automatique des comptes, fiches des membres et des entreprises, rôles d'entreprise et employés, salon des membres en jeu avec leurs têtes, alertes de guerre, de power et de diplomatie, rapport du jour, warzone, marché, HDV, classements. Une seule clé de l'API officielle pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",
@@ -402,8 +402,22 @@
       "section": "ng",
       "title": "NationsGlory : entreprises",
       "icon": "🏢",
-      "description": "Rôles Discord des entreprises du pays : le patron et ses employés (ajoutés avec /employe ajouter).",
+      "description": "Un salon par entreprise du pays avec ses stats à jour, et les rôles Discord des entreprises : le patron et ses employés (ajoutés avec /employe ajouter).",
       "fields": [
+        {
+          "key": "salons_entreprises",
+          "label": "Un salon par entreprise du pays, avec ses stats",
+          "type": "bool",
+          "default": false,
+          "help": "Le bot crée un salon « 📊・entreprises-du-pays » (le résumé) et un salon par entreprise (ex. « 🌾・marofarm ») : chiffre d'affaires, banque, contrats, rang, courbe sur 30 jours, récoltes ou production. Mis à jour aux 30 minutes. Rien n'est jamais supprimé."
+        },
+        {
+          "key": "categorie_entreprises_id",
+          "label": "Catégorie des salons d'entreprise",
+          "type": "category",
+          "default": 0,
+          "help": "Aucune = le bot crée la catégorie « 🏢 Entreprises » (lecture seule ; le rôle de l'entreprise peut écrire dans son salon)."
+        },
         {
           "key": "roles_entreprises",
           "label": "Un rôle Discord par entreprise du pays",

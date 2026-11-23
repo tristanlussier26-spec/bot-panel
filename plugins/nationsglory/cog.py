@@ -34,7 +34,7 @@ from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, mak
 from .liaison import HIGH_RANKS, AskButton, UndoButton, ask_view, candidate_names, match_member
 from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
 from .store import Store
-from .veille_run import ENTERPRISES_EVERY, FORUM_EVERY, MARKET_EVERY, ONLINE_EVERY, VeilleMixin
+from .veille_run import ENTERPRISE_CHANNELS_EVERY, ENTERPRISES_EVERY, FORUM_EVERY, MARKET_EVERY, ONLINE_EVERY, VeilleMixin
 
 log = logging.getLogger("plugin.nationsglory")
 
@@ -187,6 +187,9 @@ class GuildNG:
         self.announce_enterprises = bool(cfg.get("annoncer_entreprises", True))
         self.enterprise_roles = bool(cfg.get("roles_entreprises", False))
         self.patron_role_id = chan("role_patron_id")
+        self.enterprise_channels = bool(cfg.get("salons_entreprises", False))
+        self.enterprise_category_id = chan("categorie_entreprises_id")
+        self.last_enterprise_channels = -1e9
         self.extra_enterprises = [str(x).strip() for x in cfg.get("entreprises_pays") or [] if str(x).strip()][:50]
         self.last_enterprises = -1e9
         self.last_report_day: str | None = None
@@ -520,6 +523,9 @@ class NGSync(VeilleMixin, commands.Cog):
             if wants_enterprises and now - st.last_enterprises >= ENTERPRISES_EVERY:
                 st.last_enterprises = now
                 steps.append(("entreprises", self.run_enterprises))
+            if st.enterprise_channels and now - st.last_enterprise_channels >= ENTERPRISE_CHANNELS_EVERY:
+                st.last_enterprise_channels = now
+                steps.append(("salons des entreprises", self.run_enterprise_channels))
             if st.market_channel_id and now - st.last_market >= MARKET_EVERY:
                 st.last_market = now
                 steps.append(("marché", self.run_market))

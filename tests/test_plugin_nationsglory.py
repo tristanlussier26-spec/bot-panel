@@ -1439,3 +1439,61 @@ async def test_online_board(host):
     assert embed.title == "🟢 Amour : 2 en jeu" and embed.image.url == "attachment://enligne.png"
     assert "**Empereur** : Tristan_QC" in embed.description and sent[0].files[0].filename == "enligne.png"
     assert not await cog.run_online_board(guild, st)  # rien a changé : pas de nouvelle image
+
+
+# ---------------------------------------------------------------- salons des entreprises
+async def test_enterprise_channels(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salons_entreprises": True})
+    guild.me.guild_permissions = SimpleNamespace(manage_roles=True, manage_nicknames=True, manage_channels=True)
+    guild.default_role = FakeRole(555, 0, "@everyone")
+    messages: dict[int, list] = {}
+
+    class Channel(SimpleNamespace):
+        async def send(self, embed=None):
+            msg = SimpleNamespace(id=self.id * 100 + len(messages.setdefault(self.id, [])), embed=embed)
+            messages[self.id].append(msg)
+            return msg
+
+        def get_partial_message(self, mid):
+            channel = self
+
+            class Partial:
+                async def edit(self, embed=None):
+                    if not any(m.id == mid for m in messages.get(channel.id, [])):
+                        raise discord.NotFound(SimpleNamespace(status=404, reason="x"), "x")
+                    messages[channel.id].append(SimpleNamespace(id=mid, embed=embed, edited=True))
+            return Partial()
+
+    class Category(SimpleNamespace):
+        async def create_text_channel(self, name, overwrites=None, reason=None, topic=None):
+            ch = Channel(id=7000 + len(guild.channels), name=name, topic=topic, overwrites=overwrites)
+            guild.channels[ch.id] = ch
+            return ch
+
+    async def create_category(name, overwrites=None, reason=None):
+        cat = Category(id=6999, name=name, overwrites=overwrites)
+        guild.channels[cat.id] = cat
+        return cat
+
+    guild.create_category = create_category
+    assert await cog.run_enterprise_channels(guild, st) == 2  # résumé + AFR
+    names = sorted(c.name for c in guild.channels.values())
+    assert names == ["🌾・AFR", "🏢 Entreprises", "📊・entreprises-du-pays"]
+    afr = next(c for c in guild.channels.values() if c.name == "🌾・AFR")
+    embed = messages[afr.id][0].embed
+    assert embed.title == "🏢 AFR" and embed.thumbnail.url.endswith("/Tristan_QC.png")
+    assert "🌾 Récoltes" in {f.name for f in embed.fields}
+    # 2e tour : mêmes salons, messages modifiés
+    assert await cog.run_enterprise_channels(guild, st) == 2
+    assert len(guild.channels) == 3 and messages[afr.id][-1].edited
+    # L'entreprise quitte le pays : on le dit dans son salon, sans le supprimer
+    saved = list(ENTERPRISES)
+    ENTERPRISES[:] = [r for r in ENTERPRISES if r["name"] != "AFR"]
+    for c in cog.clients.values():
+        c._cached.clear()
+    try:
+        await cog.run_enterprise_channels(guild, st)
+    finally:
+        ENTERPRISES[:] = saved
+    assert "plus au pays" in messages[afr.id][-1].embed.description and afr.id in guild.channels

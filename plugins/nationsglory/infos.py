@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import alerts, entreprises, insights, veille
-from .common import BLUE, GREEN, GREY, RED, NationsGloryError, reply, truncate
+from .common import BLUE, GREEN, RED, NationsGloryError, reply, truncate
 from .logic import RANK_LABELS
 
 ORANGE = 0xE67E22
@@ -497,71 +497,9 @@ class NGInfos(commands.Cog):
         if st is None:
             return
         await interaction.response.defer()
-        nom = nom.strip()
-        data = await st.api.enterprise(nom)
-        rows = await st.api.enterprises()
-        if data is None:
-            close = next((r["name"] for r in rows if str(r.get("name", "")).lower() == nom.lower()), None)
-            data = await st.api.enterprise(close) if close else None
-        if data is None:
+        embed, data = await sync.enterprise_embed(interaction.guild.id, st, nom)
+        if embed is None:
             return await reply(interaction, f"Je trouve pas l'entreprise **{nom}** sur {st.api.server.capitalize()}.")
-        name = data.get("name") or nom
-        embed = discord.Embed(title=f"🏢 {name}", color=GREEN if data.get("is_open") else GREY)
-        desc = [f"{entreprises.type_label(data.get('type'))} · {'🟢 ouverte' if data.get('is_open') else '🔒 fermée'}"
-                + (f" · fondée le {data['created_on']}" if data.get("created_on") else "")]
-        if data.get("description"):
-            desc.append(f"*{truncate(str(data['description']), 300)}*")
-        if data.get("services"):
-            desc.append(f"**Services :** {truncate(str(data['services']), 300)}")
-        embed.description = "\n".join(desc)
-        owner = data.get("owner") or "?"
-        members = await st.members(max_age=300)
-        who = owner
-        if owner.lower() in members:
-            custom = await sync._role_names(st)
-            role = members[owner.lower()].get("role")
-            who += f" ({custom.get(role) or role_label(role)} de {st.country_name})"
-        if link := await sync.store.get_link_by_name(interaction.guild.id, owner):
-            who += f" · <@{link['discord_id']}>"
-        embed.add_field(name="👑 Propriétaire", value=who, inline=False)
-        staff = await sync.store.employees(interaction.guild.id, name)
-        if staff:
-            embed.add_field(name=f"👷 Employés sur Discord ({len(staff)})", inline=False,
-                            value=truncate(", ".join(f"<@{e['discord_id']}>" for e in staff)))
-        embed.add_field(name="💰 Chiffre d'affaires", value=f"{veille.fmt(data.get('turnover'))} $")
-        embed.add_field(name="🏦 Banque", value=f"{veille.fmt(data.get('bank_balance'))} $")
-        embed.add_field(name="👥 Membres", value=str(data.get("members_count", "?")))
-        contracts = f"{data.get('contracts_done', 0)} faits · {data.get('contracts_success_pct', '?')} % réussis"
-        if data.get("contracts_in_progress_value"):
-            contracts += f" · {veille.fmt(data['contracts_in_progress_value'])} $ en cours"
-        if data.get("disputes"):
-            contracts += f" · ⚠️ {data['disputes']} litige(s)"
-        embed.add_field(name="📝 Contrats", value=contracts, inline=False)
-        flows = data.get("flows_14d") or {}
-        if any(isinstance(flows.get(k), int) for k in ("net", "salaries", "taxes")):
-            embed.add_field(name="💸 14 derniers jours", inline=False,
-                            value=f"Net {veille.signed(flows.get('net'), ' $')} · salaires {veille.fmt(flows.get('salaries'))} $ · "
-                                  f"taxes {veille.fmt(flows.get('taxes'))} $")
-        pos, of = entreprises.rank(rows, name, kind=data.get("type"))
-        pos_all, of_all = entreprises.rank(rows, name)
-        if pos:
-            embed.add_field(name="🏆 Rang (chiffre d'affaires)", inline=False,
-                            value=f"{pos}e sur {of} de son type · {pos_all}e sur {of_all} au serveur")
-        points = await st.api.series("enterprise.turnover", name, "30d")
-        summary = veille.series_summary(points)
-        if summary:
-            embed.add_field(name="📈 CA sur 30 jours", inline=False,
-                            value=f"`{summary['spark']}`\n{veille.signed(summary['delta'], ' $')} · min {veille.fmt(summary['min'])} · max {veille.fmt(summary['max'])}")
-        extra = []
-        if data.get("type") in ("farm", "trader", "bet"):
-            extra += entreprises.operations_fields(await st.api.enterprise_operations(name))
-        if data.get("type") in ("electric", "petrol"):
-            extra += entreprises.energy_fields(await st.api.enterprise_energy(name))
-        if data.get("type") == "realestate":
-            if field := entreprises.parcels_field(await st.api.enterprise_parcels(name)):
-                extra.append(field)
-        for fname, value in extra[:5]:
-            embed.add_field(name=fname, value=truncate(value), inline=False)
         files = []
         try:
             if png := await st.api.image(data.get("flag_sha256")):
