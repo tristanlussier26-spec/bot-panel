@@ -93,13 +93,13 @@
     {
       "id": "nationsglory",
       "name": "Synchro NationsGlory",
-      "version": "1.3.0",
+      "version": "1.3.1",
       "description": "Tout NationsGlory dans Discord : grades ↔ rôles, /lier, alertes de guerre, de power et de diplomatie, pays surveillés, rapport du jour, warzone, annonces officielles, marché, HDV, classements, historique, en ligne et inactifs. Une seule clé de l'API officielle pour tous les serveurs.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/nationsglory-1.3.0.zip",
-      "sha256": "c80d35e03c34c97440d29f8d88300872a082e440c8df10ae03271aaffb810e33",
-      "size": 53725
+      "download": "dist/nationsglory-1.3.1.zip",
+      "sha256": "a35572fdd4b17a848766f2cd490f4f65a0156e7852048019112d56ac8cda28c3",
+      "size": 53842
     },
     {
       "id": "niveaux",

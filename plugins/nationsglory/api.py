@@ -87,9 +87,13 @@ def extract_page(data: Any) -> tuple[list[dict], str | None]:
         if isinstance(data.get(key), list):
             items = data[key]
             break
-    for container in (data, data.get("meta"), data.get("pagination"), data.get("page"), data.get("links")):
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    # La vraie API met le curseur dans meta.page : {"next_cursor": "...", "has_more": true}
+    for container in (meta.get("page"), data, meta, data.get("pagination"), data.get("page"), data.get("links")):
         if not isinstance(container, dict):
             continue
+        if container.get("has_more") is False:
+            break  # dernière page, même si un curseur traîne
         for key in ("next_cursor", "nextCursor", "cursor_next", "next"):
             value = container.get(key)
             if isinstance(value, str) and value:

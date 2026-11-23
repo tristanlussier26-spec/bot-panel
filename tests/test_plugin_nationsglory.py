@@ -72,6 +72,12 @@ def test_extract_page_shapes():
     assert extract_page({"data": [{"a": 1}], "next_cursor": "abc"}) == ([{"a": 1}], "abc")
     assert extract_page({"items": [{"a": 1}], "meta": {"next_cursor": None}}) == ([{"a": 1}], None)
     assert extract_page({"data": [], "links": {"next": "/v1/x?cursor=zz&limit=5"}}) == ([], "zz")
+    # Forme exacte de la vraie API (relevée sur Jade) : le curseur est dans meta.page
+    real = {"data": [{"a": 1}], "meta": {"request_id": "x", "generated_at": "2026-11-22T21:27:06Z",
+                                         "page": {"limit": 100, "total": 226, "next_cursor": "Y2sBqX0", "has_more": True}}}
+    assert extract_page(real) == ([{"a": 1}], "Y2sBqX0")
+    last = {"data": [{"a": 1}], "meta": {"page": {"limit": 100, "total": 226, "next_cursor": None, "has_more": False}}}
+    assert extract_page(last) == ([{"a": 1}], None)
 
 
 # ---------------------------------------------------------------- faux serveur de l'API
@@ -144,7 +150,9 @@ def paginate(rows, request, page_size_max=3):
     start = int(request.query.get("cursor", 0))
     chunk = rows[start: start + limit]
     nxt = str(start + limit) if start + limit < len(rows) else None
-    return web.json_response({"data": chunk, "next_cursor": nxt})
+    # Même enveloppe que la vraie API : le curseur est dans meta.page
+    return web.json_response({"data": chunk, "meta": {"request_id": "test", "page": {
+        "limit": limit, "total": len(rows), "next_cursor": nxt, "has_more": nxt is not None}}})
 
 
 @pytest.fixture
