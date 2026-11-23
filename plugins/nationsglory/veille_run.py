@@ -5,18 +5,25 @@ La logique (quoi publier) est dans veille.py, testable sans Discord.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
 import logging
+import time
 from datetime import datetime, timezone
 
 import discord
 
-from . import alerts, entreprises, insights, veille
+from . import alerts, entreprises, insights, tetes, veille
 from .common import BLUE, GREY, ServiceError, truncate
 from .logic import SyncPlan
 
 log = logging.getLogger("plugin.nationsglory")
 
 FORUM_EVERY = 10 * 60
+ONLINE_EVERY = 5 * 60  # la liste des connectés est publiée aux 5 min par NationsGlory
+FACE_URL = "https://files.recube.gg/nationsglory/face/{}.png"
+FACE_MAX_AGE = 6 * 3600
 ENTERPRISES_EVERY = 10 * 60
 MARKET_EVERY = 15 * 60
 NEWS_COLOR = 0x5865F2
@@ -78,6 +85,69 @@ class VeilleMixin:
         peak = await self._load(key) or {}
         if peak.get("day") != day or count > int(peak.get("max") or 0):
             await self._save(key, {"day": day, "max": max(count, int(peak.get("max") or 0) if peak.get("day") == day else 0)})
+
+    # ---- Salon « en jeu » : les têtes des membres connectés ------------------------------------------
+    async def face(self, st, name: str) -> bytes | None:
+        """La tête du skin (même image que sur nationsglory.fr), gardée 6 h."""
+        cache = self.__dict__.setdefault("_faces", {})
+        hit = cache.get(name.lower())
+        if hit and time.monotonic() - hit[0] < FACE_MAX_AGE:
+            return hit[1]
+        data = None
+        try:
+            async with st.api._http().get(FACE_URL.format(name)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+        except Exception:  # noqa: BLE001 - pas de tête : on dessine l'initiale
+            data = None
+        if len(cache) > 400:
+            cache.clear()
+        cache[name.lower()] = (time.monotonic(), data)
+        return data
+
+    async def run_online_board(self, guild: discord.Guild, st) -> bool:
+        """Met à jour le message du salon « en jeu ». Retourne True s'il a changé."""
+        channel = self._channel(guild, st.online_channel_id, st, "membres en jeu")
+        if channel is None:
+            return False
+        members = await st.members(max_age=300)
+        here = insights.online_members(members, await st.api.online())
+        custom = await self._role_names(st)
+        signature = hashlib.sha1("|".join(f"{m['username']}:{m.get('role')}" for m in here).encode()).hexdigest()
+        key = f"ng_enligne:{channel.id}"
+        saved = await self._load(key) or {}
+        if saved.get("sig") == signature and saved.get("id"):
+            return False
+        embed = discord.Embed(title=f"🟢 {st.country_name} : {len(here)} en jeu", color=0x2ECC71 if here else GREY,
+                              timestamp=discord.utils.utcnow())
+        files = []
+        if here:
+            faces = await asyncio.gather(*(self.face(st, m["username"]) for m in here))
+            people = [{"name": m["username"], "role": m.get("role"),
+                       "label": custom.get(m.get("role")) or insights_rank(m.get("role")), "face": f}
+                      for m, f in zip(here, faces)]
+            png = await asyncio.to_thread(tetes.render, people)
+            files.append(discord.File(io.BytesIO(png), filename="enligne.png"))
+            embed.set_image(url="attachment://enligne.png")
+            lines = []
+            for rank in ("LEADER", "OFFICER", "MEMBER", "RECRUIT"):
+                names = [m["username"] for m in here if m.get("role") == rank]
+                if names:
+                    lines.append(f"**{custom.get(rank) or insights_rank(rank)}** : {', '.join(names)}")
+            embed.description = truncate("\n".join(lines), 4000)
+        else:
+            embed.description = f"Personne de {st.country_name} est en jeu pour l'instant. 😴"
+        embed.set_footer(text=f"Sur {st.api.server.capitalize()} · mis à jour aux 5 minutes")
+        message = None
+        if saved.get("id"):
+            try:
+                message = await channel.get_partial_message(int(saved["id"])).edit(embed=embed, attachments=files)
+            except discord.NotFound:
+                message = None
+        if message is None:
+            message = await channel.send(embed=embed, files=files)
+        await self._save(key, {"id": str(getattr(message, "id", saved.get("id"))), "sig": signature})
+        return True
 
     # ---- Rapport du jour --------------------------------------------------------------------------
     def report_due(self, st) -> str | None:
@@ -209,6 +279,9 @@ class VeilleMixin:
 
     async def run_enterprises(self, guild: discord.Guild, st) -> list[str]:
         rows = await self.country_enterprises(st)
+        await self.sync_enterprise_roles(guild, st, rows)
+        if not (st.announce_channel_id and st.announce_enterprises):
+            return []
         key = f"ng_entreprises:{guild.id}"
         lines = entreprises.enterprise_events(await self._load(key), rows)
         await self._save(key, entreprises.snapshot(rows))
@@ -218,6 +291,86 @@ class VeilleMixin:
         if channel is not None:
             await channel.send("\n".join(lines[:10]), allowed_mentions=discord.AllowedMentions.none())
         return lines
+
+    # ---- Rôles des entreprises : un rôle par entreprise du pays (patron + employés) et un rôle « Patron » --
+    @staticmethod
+    def _holders(guild: discord.Guild, role_id: int) -> list:
+        members = guild.members.values() if isinstance(guild.members, dict) else guild.members
+        return [m for m in members if any(r.id == role_id for r in m.roles)]
+
+    async def enterprise_role(self, guild: discord.Guild, st, row: dict, *, create: bool) -> discord.Role | None:
+        """Le rôle Discord d'une entreprise (créé au besoin si l'option est activée)."""
+        key = f"ng_role_ent:{guild.id}:{row['name']}"
+        role_id = await self.store.get_value(key)
+        role = guild.get_role(int(role_id)) if role_id else None
+        if role is None:
+            role = next((r for r in getattr(guild, "roles", []) if r.name == entreprises.role_name(row["name"])), None)
+        if role is None and create:
+            if not guild.me.guild_permissions.manage_roles:
+                return None
+            try:
+                role = await guild.create_role(name=entreprises.role_name(row["name"]), mentionable=True,
+                                               colour=discord.Colour(entreprises.TYPE_COLORS.get(row.get("type"), 0x95A5A6)),
+                                               reason=f"Entreprise {row['name']} ({st.country_name})")
+            except discord.HTTPException as e:
+                if st.should_warn(f"role-ent:{row['name']}"):
+                    log.warning("%s : rôle de l'entreprise %s pas créé (%s)", guild.name, row["name"], e)
+                return None
+        if role is not None and str(role.id) != role_id:
+            await self.store.set_value(key, str(role.id))
+        return role
+
+    async def sync_enterprise_roles(self, guild: discord.Guild, st, rows: list[dict] | None = None) -> int:
+        """Ajuste les rôles d'entreprise et le rôle « Patron ». Retourne le nombre de membres modifiés."""
+        if not (st.enterprise_roles or st.patron_role_id):
+            return 0
+        rows = rows if rows is not None else await self.country_enterprises(st)
+        links = {link["ng_name"].lower(): link["discord_id"] for link in await self.store.all_links(guild.id)}
+        changes: dict[int, SyncPlan] = {}
+
+        def plan(member_id: int) -> SyncPlan:
+            return changes.setdefault(member_id, SyncPlan())
+
+        if st.enterprise_roles:
+            wanted = entreprises.wanted_holders(rows, links, await self.store.employees(guild.id))
+            current = {r["name"] for r in rows}
+            for row in rows:
+                role = await self.enterprise_role(guild, st, row, create=True)
+                if role is None:
+                    continue
+                holders = {m.id for m in self._holders(guild, role.id)}
+                for mid in wanted[row["name"]] - holders:
+                    if guild.get_member(mid):
+                        plan(mid).add_roles.add(role.id)
+                for mid in holders - wanted[row["name"]]:
+                    plan(mid).remove_roles.add(role.id)
+            # Entreprises plus au pays : on retire leur rôle (sans le supprimer)
+            prefix = f"ng_role_ent:{guild.id}:"
+            for key in await self.store.keys(prefix):
+                name = key[len(prefix):]
+                if name in current:
+                    continue
+                role_id = await self.store.get_value(key)
+                if role_id and (role := guild.get_role(int(role_id))):
+                    for m in self._holders(guild, role.id):
+                        plan(m.id).remove_roles.add(role.id)
+        if st.patron_role_id:
+            bosses = entreprises.patrons(await st.api.enterprises(), links)
+            holders = {m.id for m in self._holders(guild, st.patron_role_id)}
+            for mid in bosses - holders:
+                if guild.get_member(mid):
+                    plan(mid).add_roles.add(st.patron_role_id)
+            for mid in holders - bosses:
+                plan(mid).remove_roles.add(st.patron_role_id)
+        done = 0
+        for mid, p in changes.items():
+            member = guild.get_member(mid)
+            if member is None or p.empty:
+                continue
+            await self._apply(member, p, st, "NationsGlory : rôles des entreprises")
+            done += 1
+        return done
+
 
     # ---- Marché des céréales -----------------------------------------------------------------------
     async def run_market(self, guild: discord.Guild, st) -> list[str]:
@@ -280,3 +433,9 @@ class VeilleMixin:
         from .cog import paris_today  # même jour que les dates de l'API
 
         return paris_today()
+
+
+def insights_rank(role: str | None) -> str:
+    from .logic import RANK_LABELS
+
+    return RANK_LABELS.get(role or "", role or "Sans grade")

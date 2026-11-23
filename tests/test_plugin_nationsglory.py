@@ -454,6 +454,7 @@ class FakeMember:
         self.display_avatar = SimpleNamespace(url="https://example.invalid/a.png")
         self.name, self.created_at, self.send = f"joueur{uid}", discord.utils.utcnow(), AsyncMock()
         self.guild_permissions = SimpleNamespace(manage_roles=False)
+        self.bot, self.global_name = False, None
 
     @property
     def top_role(self):
@@ -1288,3 +1289,153 @@ async def test_enterprise_announcements(host):
     finally:
         ENTERPRISES.pop()
     assert lines == ["🏢 **Bob** a fondé l'entreprise **SakhaElec** (⚡ Électricité)!"] and chan.send.await_count == 1
+
+
+# ---------------------------------------------------------------- liaison automatique
+from plugins.nationsglory import liaison, tetes  # noqa: E402
+
+
+def test_match_member():
+    members = {m["username"].lower(): m for m in MEMBERS}
+    assert liaison.match_member(["TRISTAN_QC"], members) == "Tristan_QC"
+    assert liaison.match_member(["[SKH] Joueur_2 | Dealer"], members) == "Joueur_2"
+    assert liaison.match_member(["Bob et Joueur_1"], members) is None  # deux pseudos : ambigu, on demande
+    assert liaison.match_member(["Bob"], members, taken={"bob"}) is None  # déjà lié à quelqu'un d'autre
+    assert liaison.match_member(["Steve", "steve_123"], members) is None
+    member = SimpleNamespace(nick="[SKH] Bob", global_name="Bobby", name="bob.discord")
+    assert liaison.candidate_names(member) == ["[SKH] Bob", "Bobby", "bob.discord"]
+
+
+async def test_auto_link_and_ask(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_validation_id": 77, "salon_liaison_id": 78})
+    validation = SimpleNamespace(id=77, send=AsyncMock())
+    lobby = SimpleNamespace(id=78, send=AsyncMock())
+    guild.channels.update({77: validation, 78: lobby})
+
+    # Nom qui correspond à un membre (grade bas) : lié tout seul, avec « Annuler » pour les officiers
+    dealer = add_member(guild, 60)
+    dealer.nick = "[SKH] Joueur_2"
+    await cog.on_member_join(dealer)
+    assert (await cog.store.get_link(555, 60))["ng_name"] == "Joueur_2" and 3 in {r.id for r in dealer.roles}
+    view = validation.send.call_args.kwargs["view"]
+    assert view.children[0].custom_id == "ngl:undo:60:Joueur_2" and "lié tout seul" in dealer.send.call_args.args[0]
+
+    # Le nom du chef : pas de liaison directe, une demande de validation
+    faux_chef = add_member(guild, 61)
+    faux_chef.nick = "Tristan_QC"
+    await cog.on_member_join(faux_chef)
+    assert await cog.store.get_link(555, 61) is None
+    assert [c.custom_id for c in validation.send.call_args.kwargs["view"].children] == ["ngl:ok:61:Tristan_QC", "ngl:no:61:Tristan_QC"]
+
+    # Introuvable : le bot lui demande son pseudo en MP (une seule fois)
+    inconnu = add_member(guild, 62)
+    await cog.on_member_join(inconnu)
+    assert inconnu.send.call_args.kwargs["view"].children[0].custom_id == "ngl:ask:555"
+    await cog.on_member_join(inconnu)
+    assert inconnu.send.await_count == 1
+    # MP fermés : dans le salon de liaison
+    ferme = add_member(guild, 63)
+    ferme.send = AsyncMock(side_effect=discord.Forbidden(SimpleNamespace(status=403, reason="x"), "MP fermés"))
+    await cog.on_member_join(ferme)
+    assert lobby.send.call_args.args[0] == "<@63>"
+
+    # Le formulaire du bouton (peut venir d'un MP : la guilde vient du bouton)
+    bot._connection._guilds = {555: guild}
+    i = inter(guild, inconnu)
+    i.guild = None
+    i.client = bot
+    modal = liaison.PseudoModal(555)
+    modal.pseudo._value = "Joueur_3"
+    await modal.on_submit(i)
+    assert "Demande envoyée" in said(i)
+
+    # Un officier annule une liaison automatique
+    officer = add_member(guild, 50)
+    officer.guild_permissions = SimpleNamespace(manage_roles=True)
+    i = inter(guild, officer)
+    i.message = SimpleNamespace(embeds=[discord.Embed(title="x")])
+    await cog.undo_auto_link(i, 60, "Joueur_2")
+    assert await cog.store.get_link(555, 60) is None and 3 not in {r.id for r in dealer.roles}
+
+    # Changer de surnom réessaie la liaison
+    later = add_member(guild, 64)
+    before = SimpleNamespace(nick=None)
+    later.nick = "Joueur_4"
+    await cog.on_member_update(before, later)
+    assert (await cog.store.get_link(555, 64))["ng_name"] == "Joueur_4"
+
+
+# ---------------------------------------------------------------- employés et rôles d'entreprise
+async def test_employees_and_enterprise_roles(host):
+    bot, cog, _ = host
+    infos = bot.get_cog("NGInfos")
+    st, guild = await _setup_guild(bot, cog, {"roles_entreprises": True, "role_patron_id": 99})
+    created = []
+
+    async def create_role(name, **kw):
+        role = FakeRole(1000 + len(created), 1, name)
+        created.append(role)
+        roles_by_id[role.id] = role
+        return role
+
+    roles_by_id = {}
+    base_get = guild.get_role
+    guild.get_role = lambda rid: roles_by_id.get(rid) or base_get(rid)
+    guild.create_role = create_role
+    guild.roles = []
+    patron = add_member(guild, 42)
+    employe = add_member(guild, 43)
+    curieux = add_member(guild, 44)
+    await cog.store.add_link(555, 42, "Tristan_QC")  # propriétaire d'AFR
+
+    i = inter(guild, curieux)
+    await infos.employe_ajouter.callback(infos, i, employe, "AFR")
+    assert "Seul le patron" in said(i)
+    i = inter(guild, patron)
+    await infos.employe_ajouter.callback(infos, i, employe, "afr")
+    assert "travaille maintenant pour **AFR**" in said(i)
+    assert [r.name for r in created] == ["🏢 AFR"]
+    assert 1000 in {r.id for r in employe.roles} and 1000 in {r.id for r in patron.roles} and 99 in {r.id for r in patron.roles}
+    i = inter(guild, patron)
+    await infos.employe_liste.callback(infos, i, None)
+    assert "<@43>" in said(i).fields[0].value
+    i = inter(guild, patron)
+    await infos.employe_retirer.callback(infos, i, employe, "AFR")
+    assert 1000 not in {r.id for r in employe.roles}
+    assert await cog.sync_enterprise_roles(guild, st) == 0  # tout est à jour
+    i = inter(guild, patron)
+    await infos.entreprise.callback(infos, i, "AFR")
+    assert i.followup.send.called
+
+
+# ---------------------------------------------------------------- salon « en jeu » avec les têtes
+def test_render_heads():
+    from PIL import Image
+    import io as _io
+    face = _io.BytesIO()
+    Image.new("RGBA", (8, 8), (200, 150, 100, 255)).save(face, "PNG")
+    people = [{"name": f"Joueur_{i}", "role": "MEMBER", "label": "Dealer", "face": face.getvalue() if i % 2 else None}
+              for i in range(50)]
+    png = tetes.render(people)
+    img = Image.open(_io.BytesIO(png))
+    assert img.size == (12 * 2 + 6 * tetes.CELL_W, 12 * 2 + 9 * tetes.CELL_H)  # 48 têtes + « +2 »
+
+
+async def test_online_board(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_en_ligne_id": 85})
+    sent = []
+
+    async def send(**kw):
+        msg = SimpleNamespace(id=900 + len(sent), **kw)
+        sent.append(msg)
+        return msg
+
+    guild.channels[85] = SimpleNamespace(id=85, send=send, get_partial_message=None)
+    cog.face = AsyncMock(return_value=None)
+    assert await cog.run_online_board(guild, st)
+    embed = sent[0].embed
+    assert embed.title == "🟢 Amour : 2 en jeu" and embed.image.url == "attachment://enligne.png"
+    assert "**Empereur** : Tristan_QC" in embed.description and sent[0].files[0].filename == "enligne.png"
+    assert not await cog.run_online_board(guild, st)  # rien a changé : pas de nouvelle image

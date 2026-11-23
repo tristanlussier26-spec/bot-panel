@@ -524,6 +524,10 @@ class NGInfos(commands.Cog):
         if link := await sync.store.get_link_by_name(interaction.guild.id, owner):
             who += f" · <@{link['discord_id']}>"
         embed.add_field(name="👑 Propriétaire", value=who, inline=False)
+        staff = await sync.store.employees(interaction.guild.id, name)
+        if staff:
+            embed.add_field(name=f"👷 Employés sur Discord ({len(staff)})", inline=False,
+                            value=truncate(", ".join(f"<@{e['discord_id']}>" for e in staff)))
         embed.add_field(name="💰 Chiffre d'affaires", value=f"{veille.fmt(data.get('turnover'))} $")
         embed.add_field(name="🏦 Banque", value=f"{veille.fmt(data.get('bank_balance'))} $")
         embed.add_field(name="👥 Membres", value=str(data.get("members_count", "?")))
@@ -720,6 +724,113 @@ class NGInfos(commands.Cog):
                               description="\n".join(lines) or "Pas encore de données : le bot lit les fiches des membres petit à petit.")
         embed.set_footer(text=f"Fiches lues : {checked}/{len(rows)} membres (une aux 30 secondes, relues aux 12 h)")
         await reply(interaction, embed=embed, ephemeral=False)
+
+    # ---- /employe ... : les employés des entreprises (l'API les nomme pas) ----------------------
+    employe = app_commands.Group(name="employe", description="Les employés des entreprises du pays (et leur rôle Discord)",
+                                 guild_only=True)
+
+    async def _enterprise_for(self, interaction: discord.Interaction, st, sync, name: str) -> dict | None:
+        rows = await sync.country_enterprises(st)
+        row = next((r for r in rows if r["name"].lower() == name.strip().lower()), None)
+        if row is None:
+            await reply(interaction, f"**{name}** est pas une entreprise du pays. Vois `/entreprises`.")
+        return row
+
+    async def _can_manage(self, interaction: discord.Interaction, st, sync, row: dict) -> bool:
+        """Le patron (compte lié au propriétaire), le staff (Gérer les rôles) ou le rôle validateur."""
+        user = interaction.user
+        if getattr(user, "guild_permissions", None) and user.guild_permissions.manage_roles:
+            return True
+        if st.validator_role_id and any(r.id == st.validator_role_id for r in getattr(user, "roles", [])):
+            return True
+        link = await sync.store.get_link(interaction.guild.id, user.id)
+        return bool(link and str(row.get("owner") or "").lower() == link["ng_name"].lower())
+
+    @employe.command(name="ajouter", description="Ajoute un employé à ton entreprise : il reçoit le rôle de l'entreprise")
+    @app_commands.describe(membre="Le membre Discord", entreprise="L'entreprise du pays")
+    async def employe_ajouter(self, interaction: discord.Interaction, membre: discord.Member,
+                              entreprise: app_commands.Range[str, 1, 64]) -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        row = await self._enterprise_for(interaction, st, sync, entreprise)
+        if row is None:
+            return
+        if not await self._can_manage(interaction, st, sync, row):
+            return await reply(interaction, f"⛔ Seul le patron de **{row['name']}** ({row.get('owner')}) ou le staff peut gérer ses employés.")
+        added = await sync.store.add_employee(interaction.guild.id, row["name"], membre.id, interaction.user.id)
+        await sync.sync_enterprise_roles(interaction.guild, st)
+        note = "" if st.enterprise_roles else "\n(Les rôles d'entreprise sont désactivés dans les options : la liste est gardée quand même.)"
+        await reply(interaction, (f"✅ {membre.mention} travaille maintenant pour **{row['name']}**." if added
+                                  else f"{membre.mention} était déjà employé de **{row['name']}**.") + note)
+
+    @employe.command(name="retirer", description="Retire un employé de ton entreprise (et son rôle)")
+    @app_commands.describe(membre="Le membre Discord", entreprise="L'entreprise du pays")
+    async def employe_retirer(self, interaction: discord.Interaction, membre: discord.Member,
+                              entreprise: app_commands.Range[str, 1, 64]) -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        row = await self._enterprise_for(interaction, st, sync, entreprise)
+        if row is None:
+            return
+        if not await self._can_manage(interaction, st, sync, row) and membre.id != interaction.user.id:
+            return await reply(interaction, f"⛔ Seul le patron de **{row['name']}** ou le staff peut retirer un employé.")
+        removed = await sync.store.remove_employee(interaction.guild.id, row["name"], membre.id)
+        await sync.sync_enterprise_roles(interaction.guild, st)
+        await reply(interaction, f"👋 {membre.mention} travaille plus pour **{row['name']}**." if removed
+                    else f"{membre.mention} était pas employé de **{row['name']}**.")
+
+    @employe.command(name="liste", description="Les employés des entreprises du pays")
+    @app_commands.describe(entreprise="Une seule entreprise (toutes par défaut)")
+    async def employe_liste(self, interaction: discord.Interaction, entreprise: app_commands.Range[str, 1, 64] | None = None) -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        rows = await sync.country_enterprises(st)
+        if entreprise:
+            rows = [r for r in rows if r["name"].lower() == entreprise.strip().lower()]
+        staff = await sync.store.employees(interaction.guild.id)
+        links = {link["ng_name"].lower(): link["discord_id"] for link in await sync.store.all_links(interaction.guild.id)}
+        embed = discord.Embed(title=f"👷 Employés · {st.country_name}", color=BLUE)
+        for r in rows[:20]:
+            owner_id = links.get(str(r.get("owner") or "").lower())
+            people = [f"<@{e['discord_id']}>" for e in staff if e["enterprise"] == r["name"]]
+            head = f"👑 {r.get('owner') or '?'}" + (f" (<@{owner_id}>)" if owner_id else "")
+            value = head + "\n" + (", ".join(people) if people else "*Aucun employé ajouté*")
+            value += f"\n{len(people) + 1} sur Discord · {r.get('members_count', '?')} membres en jeu"
+            embed.add_field(name=f"{entreprises.type_label(r.get('type'))} {r['name']}", value=truncate(value), inline=False)
+        if not rows:
+            embed.description = "Aucune entreprise du pays."
+        embed.set_footer(text="Le patron ajoute ses employés avec /employe ajouter · l'API de NationsGlory les nomme pas")
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    async def _country_enterprise_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        sync = self.bot.get_cog("NGSync")
+        st = sync.state(interaction.guild_id) if sync else None
+        if st is None:
+            return []
+        try:
+            rows = await sync.country_enterprises(st)
+        except Exception:  # noqa: BLE001
+            return []
+        cur = current.lower()
+        return [app_commands.Choice(name=r["name"], value=r["name"]) for r in rows if cur in r["name"].lower()][:25]
+
+    @employe_ajouter.autocomplete("entreprise")
+    async def _emp_add_ac(self, interaction: discord.Interaction, current: str):
+        return await self._country_enterprise_choices(interaction, current)
+
+    @employe_retirer.autocomplete("entreprise")
+    async def _emp_rm_ac(self, interaction: discord.Interaction, current: str):
+        return await self._country_enterprise_choices(interaction, current)
+
+    @employe_liste.autocomplete("entreprise")
+    async def _emp_list_ac(self, interaction: discord.Interaction, current: str):
+        return await self._country_enterprise_choices(interaction, current)
 
     # ---- /statut-ng -------------------------------------------------------------------------------
     @app_commands.command(name="statut-ng", description="L'état des données NationsGlory (ce qui est à jour ou en panne)")

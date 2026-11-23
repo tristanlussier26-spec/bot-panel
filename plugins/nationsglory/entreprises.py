@@ -153,3 +153,34 @@ def parcels_field(rows: list[dict]) -> tuple[str, str] | None:
         unit = "/jour" if p.get("price_unit") == "per_day" else ""
         lines.append(f"• {p.get('parcel')} : {PARCEL_STATUS.get(p.get('status'))} {fmt(p.get('price'))} ${unit}")
     return (f"🏠 Parcelles ({len(rows)})", "\n".join(lines))
+
+
+# ---------------------------------------------------------------- rôles Discord des entreprises
+TYPE_COLORS = {
+    "farm": 0x7CB342, "electric": 0xFDD835, "petrol": 0x455A64, "repair": 0x8D6E63, "build": 0xFB8C00,
+    "terraform": 0x6D4C41, "trader": 0x26A69A, "engineer": 0x78909C, "casino": 0xD81B60, "realestate": 0x5C6BC0,
+    "bet": 0xAB47BC, "pvp": 0xE53935, "journalist": 0x90A4AE, "loan": 0x43A047, "lawyer": 0x3949AB,
+}
+
+
+def role_name(enterprise: str) -> str:
+    return f"🏢 {enterprise}"[:100]
+
+
+def wanted_holders(rows: list[dict], links: dict[str, int], employees: list[dict]) -> dict[str, set[int]]:
+    """{entreprise: comptes Discord qui doivent avoir son rôle} : le patron (s'il a lié son compte) et ses employés."""
+    wanted: dict[str, set[int]] = {r["name"]: set() for r in rows if r.get("name")}
+    for r in rows:
+        owner_id = links.get(str(r.get("owner") or "").lower())
+        if owner_id and r.get("name") in wanted:
+            wanted[r["name"]].add(owner_id)
+    for e in employees:
+        if e["enterprise"] in wanted:
+            wanted[e["enterprise"]].add(int(e["discord_id"]))
+    return wanted
+
+
+def patrons(all_rows: list[dict], links: dict[str, int]) -> set[int]:
+    """Comptes Discord liés à un joueur qui possède au moins une entreprise sur le serveur."""
+    owners = {str(r.get("owner") or "").lower() for r in all_rows if r.get("owner")}
+    return {discord_id for name, discord_id in links.items() if name in owners}

@@ -31,9 +31,10 @@ from discord.ext import commands, tasks
 from . import alerts, insights
 from .api import NationsGlory, RateLimiter, normalize_target
 from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, make_embed, reply, truncate
+from .liaison import HIGH_RANKS, AskButton, UndoButton, ask_view, candidate_names, match_member
 from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
 from .store import Store
-from .veille_run import ENTERPRISES_EVERY, FORUM_EVERY, MARKET_EVERY, VeilleMixin
+from .veille_run import ENTERPRISES_EVERY, FORUM_EVERY, MARKET_EVERY, ONLINE_EVERY, VeilleMixin
 
 log = logging.getLogger("plugin.nationsglory")
 
@@ -149,8 +150,13 @@ class GuildNG:
         self.interval = max(1, int(cfg.get("intervalle_minutes", 5)))
         self.validation_channel_id = chan("salon_validation_id")
         self.validator_role_id = chan("role_validateur_id")
+        self.auto_link = bool(cfg.get("liaison_auto", True))
+        self.ask_pseudo = bool(cfg.get("demander_pseudo", True))
+        self.link_channel_id = chan("salon_liaison_id")
         self.stats_channel_id = chan("salon_stats_id")
         self.status_interval = max(1, int(cfg.get("statut_minutes", 5)))
+        self.online_channel_id = chan("salon_en_ligne_id")
+        self.last_online_board = -1e9
         self.announce_channel_id = chan("salon_annonces_id")
         self.announce = {
             k: bool(cfg.get(f"annoncer_{k}", d)) for k, d in (("arrivees", True), ("promotions", True), ("departs", False))
@@ -179,6 +185,8 @@ class GuildNG:
         self.inactive_role_id = chan("role_inactif_id")
         self.inactive_days = max(1, int(cfg.get("jours_inactif", 14) or 14))
         self.announce_enterprises = bool(cfg.get("annoncer_entreprises", True))
+        self.enterprise_roles = bool(cfg.get("roles_entreprises", False))
+        self.patron_role_id = chan("role_patron_id")
         self.extra_enterprises = [str(x).strip() for x in cfg.get("entreprises_pays") or [] if str(x).strip()][:50]
         self.last_enterprises = -1e9
         self.last_report_day: str | None = None
@@ -233,12 +241,12 @@ class NGSync(VeilleMixin, commands.Cog):
         await self.store.connect()
         if not self.api_key():
             log.warning("NG_API_KEY est vide : mets la clé de l'API NationsGlory dans l'onglet Plugins de Bot Panel")
-        self.bot.add_dynamic_items(LinkButton)
+        self.bot.add_dynamic_items(LinkButton, AskButton, UndoButton)
         self.tick.start()
 
     async def cog_unload(self) -> None:
         self.tick.cancel()
-        self.bot.remove_dynamic_items(LinkButton)
+        self.bot.remove_dynamic_items(LinkButton, AskButton, UndoButton)
         for client in self.clients.values():
             await client.close()
         await self.store.close()
@@ -326,7 +334,8 @@ class NGSync(VeilleMixin, commands.Cog):
         except ConfigError as e:
             errors.append(f"NationsGlory : {e}")
         else:
-            for key, label in (("role_en_jeu_id", "« connecté en jeu »"), ("role_inactif_id", "« inactif »")):
+            for key, label in (("role_en_jeu_id", "« connecté en jeu »"), ("role_inactif_id", "« inactif »"),
+                               ("role_patron_id", "« patron »")):
                 role_id = int(ng.get(key, 0) or 0)
                 if role_id and role_id in settings.managed_roles:
                     errors.append(f"NationsGlory : le rôle {label} est déjà utilisé pour un grade ou le pays")
@@ -462,6 +471,7 @@ class NGSync(VeilleMixin, commands.Cog):
         await self.sync_special_roles(guild, st, members, online_now)
         if st.announce_channel_id:
             await self.announce_country_changes(guild, st, members)
+        await self.auto_link_pass(guild, st, members)
         checked, changed, errors = await self.sync_all(guild, st, members)
         if changed or errors:
             log.info("%s : synchro NG, %d vérifié(s), %d mis à jour, %d erreur(s)", guild.name, checked, changed, errors)
@@ -492,6 +502,9 @@ class NGSync(VeilleMixin, commands.Cog):
             if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
                 st.last_status = now
                 steps.append(("stats", self.run_status))
+            if st.online_channel_id and now - st.last_online_board >= ONLINE_EVERY:
+                st.last_online_board = now
+                steps.append(("en jeu", self.run_online_board))
             if st.war_channel_id and now - st.last_alerts >= ALERTS_EVERY:
                 st.last_alerts = now
                 steps.append(("alertes", self.run_alerts))
@@ -503,7 +516,8 @@ class NGSync(VeilleMixin, commands.Cog):
             if st.forum_channel_id and now - st.last_forum >= FORUM_EVERY:
                 st.last_forum = now
                 steps.append(("forum", self.run_forum))
-            if st.announce_channel_id and st.announce_enterprises and now - st.last_enterprises >= ENTERPRISES_EVERY:
+            wants_enterprises = (st.announce_channel_id and st.announce_enterprises) or st.enterprise_roles or st.patron_role_id
+            if wants_enterprises and now - st.last_enterprises >= ENTERPRISES_EVERY:
                 st.last_enterprises = now
                 steps.append(("entreprises", self.run_enterprises))
             if st.market_channel_id and now - st.last_market >= MARKET_EVERY:
@@ -561,15 +575,138 @@ class NGSync(VeilleMixin, commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        """Un membre lié revient sur le Discord : on lui redonne ses rôles."""
+        """Un membre lié revient : on lui redonne ses rôles. Sinon on essaie de le lier par son nom,
+        et si on trouve pas, on lui demande son pseudo NationsGlory."""
         st = self.state(member.guild.id)
-        link = await self.store.get_link(member.guild.id, member.id) if st else None
-        if link is None:
+        if st is None or member.bot:
             return
+        link = await self.store.get_link(member.guild.id, member.id)
         try:
-            await self.sync_member(member, link, st)
+            if link is not None:
+                await self.sync_member(member, link, st)
+            elif not await self.try_auto_link(member, st) and st.ask_pseudo:
+                await self.ask_member(member, st)
         except ServiceError as e:
             log.warning("Synchro de %s à son arrivée : %s", member, e)
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Un membre pas lié change de surnom (ex. il met son pseudo NG) : on réessaie la liaison automatique."""
+        if before.nick == after.nick or after.bot:
+            return
+        st = self.state(after.guild.id)
+        if st is None or not st.auto_link or await self.store.get_link(after.guild.id, after.id):
+            return
+        try:
+            await self.try_auto_link(after, st)
+        except ServiceError as e:
+            log.warning("Liaison automatique de %s : %s", after, e)
+
+    # ---- Liaison automatique et demande du pseudo ---------------------------------------------
+    async def try_auto_link(self, member: discord.Member, st: GuildNG, members: dict[str, dict] | None = None,
+                            taken: set[str] | None = None) -> str | None:
+        """Lie le membre si un de ses noms Discord correspond à un membre du pays. Retourne le pseudo, ou None."""
+        if not st.auto_link or member.bot:
+            return None
+        members = members if members is not None else await st.members(max_age=300)
+        if taken is None:
+            taken = {link["ng_name"].lower() for link in await self.store.all_links(member.guild.id)}
+        name = match_member(candidate_names(member), members, taken)
+        if name is None:
+            return None
+        entry = members[name.lower()]
+        channel = member.guild.get_channel(st.validation_channel_id) if st.validation_channel_id else None
+        if entry.get("role") in HIGH_RANKS and channel is not None:
+            # Chef ou officier : n'importe qui pourrait prendre ce nom, un officier doit valider
+            key = f"ng_auto_demande:{member.guild.id}:{member.id}:{name.lower()}"
+            if await self.store.get_value(key):
+                return None
+            await self.store.set_value(key, "1")
+            embed = make_embed("🔗 Liaison à valider (nom identique)", BLUE, user=member,
+                               description=f"{member.mention} porte le nom de **{name}** "
+                                           f"({rank_label(entry.get('role'))} de {st.country_name}).")
+            view = discord.ui.View(timeout=None)
+            view.add_item(LinkButton("ok", member.id, name))
+            view.add_item(LinkButton("no", member.id, name))
+            await channel.send(embed=embed, view=view)
+            return None
+        summary = await self._link(member, name, st)
+        log.info("%s : %s lié automatiquement à %s (même nom)", member.guild.name, member, name)
+        if channel is not None:
+            embed = make_embed("🔗 Liaison automatique", GREEN, user=member,
+                               description=f"{member.mention} ↔ **{name}** (même nom sur Discord et NationsGlory)")
+            embed.add_field(name=f"Grade dans {st.country_name}", value=rank_label(entry.get("role")))
+            view = discord.ui.View(timeout=None)
+            view.add_item(UndoButton(member.id, name))
+            await channel.send(embed=embed, view=view)
+        await self._dm(member, f"🔗 Ton compte Discord a été lié tout seul à **{name}** sur NationsGlory (même nom).\n"
+                               f"{summary}\nSi c'est pas toi, fais `/delier` sur le serveur.")
+        return name
+
+    async def ask_member(self, member: discord.Member, st: GuildNG) -> bool:
+        """Demande son pseudo NationsGlory au membre : en MP, sinon dans le salon de liaison (une seule fois)."""
+        key = f"ng_demande:{member.guild.id}:{member.id}"
+        if await self.store.get_value(key):
+            return False
+        await self.store.set_value(key, "1")
+        embed = discord.Embed(
+            title=f"🔗 Bienvenue sur le serveur de {st.country_name}!", color=BLUE,
+            description=f"Je trouve pas ton pseudo NationsGlory parmi les membres de **{st.country_name}**.\n"
+                        "Clique sur le bouton et écris ton pseudo : tu recevras ton grade tout seul.",
+        )
+        try:
+            await member.send(embed=embed, view=ask_view(member.guild.id))
+            return True
+        except discord.HTTPException:
+            pass  # MP fermés
+        channel = member.guild.get_channel(st.link_channel_id) if st.link_channel_id else None
+        if channel is None:
+            return False
+        try:
+            await channel.send(member.mention, embed=embed, view=ask_view(member.guild.id),
+                               allowed_mentions=discord.AllowedMentions(users=[member]))
+            return True
+        except discord.HTTPException:
+            return False
+
+    async def auto_link_pass(self, guild: discord.Guild, st: GuildNG, members: dict[str, dict]) -> int:
+        """À chaque synchro : essaie de lier les membres du Discord qui le sont pas encore."""
+        if not st.auto_link:
+            return 0
+        links = await self.store.all_links(guild.id)
+        linked = {link["discord_id"] for link in links}
+        taken = {link["ng_name"].lower() for link in links}
+        everyone = guild.members.values() if isinstance(guild.members, dict) else guild.members
+        done = 0
+        for member in list(everyone):
+            if member.bot or member.id in linked:
+                continue
+            if name := await self.try_auto_link(member, st, members, taken):
+                taken.add(name.lower())
+                done += 1
+        return done
+
+    async def undo_auto_link(self, interaction: discord.Interaction, user_id: int, name: str) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        validator = interaction.guild.get_member(interaction.user.id)
+        if validator is None or not self._can_validate(validator, st):
+            return await reply(interaction, "⛔ T'as pas le droit d'annuler une liaison.")
+        link = await self.store.get_link(interaction.guild.id, user_id)
+        target = interaction.guild.get_member(user_id)
+        if link is None or link["ng_name"].lower() != name.lower():
+            return await reply(interaction, "Cette liaison existe déjà plus.")
+        if target is not None:
+            await self._unlink(target, link, st, by=interaction.user)
+        else:
+            await self.store.remove_link(interaction.guild.id, user_id)
+        embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else make_embed("Liaison", GREY)
+        embed.color = GREY
+        embed.add_field(name="Décision", value=f"↩️ Annulée par {interaction.user.mention}", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+        if target is not None:
+            await self._dm(target, f"↩️ La liaison avec **{name}** a été annulée par un officier. Fais `/lier` avec ton vrai pseudo.")
 
     # ---- Salon de statut (qui est en ligne + guerres) ------------------------------------------
     async def _edit_or_send(self, channel, key: str, **content) -> None:
@@ -889,16 +1026,21 @@ class NGSync(VeilleMixin, commands.Cog):
     @app_commands.checks.cooldown(1, 60.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.guild_only()
     async def lier(self, interaction: discord.Interaction, pseudo: Pseudo) -> None:
-        st = await self._st(interaction)
+        await self.request_link(interaction, interaction.user, pseudo)
+
+    async def request_link(self, interaction: discord.Interaction, member: discord.Member, pseudo: str) -> None:
+        """/lier ou le formulaire du bouton « Lier mon compte » (qui peut venir d'un MP)."""
+        guild = member.guild
+        st = self.state(guild.id)
         if st is None:
-            return
-        guild_id = interaction.guild.id
+            return await reply(interaction, "La synchro NationsGlory est pas activée sur ce serveur (voir le panel).")
+        guild_id = guild.id
         pseudo = pseudo.strip()
         if not NAME_RE.match(pseudo):
             return await reply(interaction, "Pseudo invalide (lettres, chiffres et _ seulement).")
         await interaction.response.defer(ephemeral=True)
 
-        if link := await self.store.get_link(guild_id, interaction.user.id):
+        if link := await self.store.get_link(guild_id, member.id):
             return await reply(interaction, f"Ton compte est déjà lié à **{link['ng_name']}**. Fais `/delier` d'abord.")
         if await self.store.get_link_by_name(guild_id, pseudo):
             return await reply(interaction, f"**{pseudo}** est déjà lié à un autre membre. Contacte un officier si c'est une erreur.")
@@ -909,24 +1051,37 @@ class NGSync(VeilleMixin, commands.Cog):
         name = entry["username"] if entry else pseudo
 
         if not st.validation_channel_id:
-            summary = await self._link(interaction.user, name, st)
+            summary = await self._link(member, name, st)
             return await reply(interaction, f"✅ Ton compte est lié à **{name}**!\n{summary}")
 
-        channel = interaction.guild.get_channel(st.validation_channel_id)
+        channel = guild.get_channel(st.validation_channel_id)
         if channel is None:
-            log.error("%s : salon de validation %s introuvable", interaction.guild.name, st.validation_channel_id)
+            log.error("%s : salon de validation %s introuvable", guild.name, st.validation_channel_id)
             return await reply(interaction, "⚠️ Le salon de validation est mal configuré. Préviens un admin.")
         embed = make_embed(
-            "🔗 Demande de liaison", BLUE, user=interaction.user,
-            description=f"{interaction.user.mention} dit être **{name}** sur NationsGlory.",
+            "🔗 Demande de liaison", BLUE, user=member,
+            description=f"{member.mention} dit être **{name}** sur NationsGlory.",
         )
         embed.add_field(name=f"Grade dans {st.country_name}", value=rank_label(entry["role"]) if entry else "Pas dans le pays")
-        embed.add_field(name="Compte Discord créé", value=discord.utils.format_dt(interaction.user.created_at, "R"))
+        embed.add_field(name="Compte Discord créé", value=discord.utils.format_dt(member.created_at, "R"))
         view = discord.ui.View(timeout=None)
-        view.add_item(LinkButton("ok", interaction.user.id, name))
-        view.add_item(LinkButton("no", interaction.user.id, name))
+        view.add_item(LinkButton("ok", member.id, name))
+        view.add_item(LinkButton("no", member.id, name))
         await channel.send(embed=embed, view=view)
         await reply(interaction, "📨 Demande envoyée aux officiers. Tu vas recevoir un MP quand elle sera acceptée.")
+
+    @app_commands.command(name="liaison-panneau", description="Publie le bouton « Lier mon compte NationsGlory » dans ce salon")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def liaison_panneau(self, interaction: discord.Interaction) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        embed = discord.Embed(title=f"🔗 Lier ton compte NationsGlory · {st.country_name}", color=BLUE, description=(
+            "Clique sur le bouton et écris ton pseudo NationsGlory.\n"
+            "Ton grade du pays devient ton rôle Discord, et il se met à jour tout seul."))
+        await interaction.channel.send(embed=embed, view=ask_view(interaction.guild.id))
+        await reply(interaction, "✅ Panneau publié.")
 
     @app_commands.command(name="delier", description="Délie ton compte NationsGlory")
     @app_commands.guild_only()

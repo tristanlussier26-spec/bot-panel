@@ -2,8 +2,8 @@
   "format": 1,
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
-  "version": "1.4.0",
-  "description": "Tout NationsGlory dans Discord : grades ↔ rôles, /lier, fiches des membres et des entreprises du pays, alertes de guerre, de power et de diplomatie, pays surveillés, rapport du jour, warzone, annonces officielles, marché, HDV, classements, historique. Une seule clé de l'API officielle pour tous les serveurs.",
+  "version": "1.5.0",
+  "description": "Tout NationsGlory dans Discord : grades ↔ rôles avec liaison automatique des comptes, fiches des membres et des entreprises, rôles d'entreprise et employés, salon des membres en jeu avec leurs têtes, alertes de guerre, de power et de diplomatie, rapport du jour, warzone, marché, HDV, classements. Une seule clé de l'API officielle pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",
   "enabled_by": "ng.active",
@@ -112,6 +112,27 @@
           "default": true
         },
         {
+          "key": "liaison_auto",
+          "label": "Liaison automatique par le nom",
+          "type": "bool",
+          "default": true,
+          "help": "Si le surnom ou le nom Discord d'un membre contient le pseudo d'un membre du pays (ex. « [SKH] pfpf »), son compte est lié tout seul. Le chef et les officiers passent quand même par la validation."
+        },
+        {
+          "key": "demander_pseudo",
+          "label": "Demander le pseudo si je le trouve pas",
+          "type": "bool",
+          "default": true,
+          "help": "À son arrivée, le bot envoie un MP avec un bouton « Lier mon compte » (ou l'écrit dans le salon de liaison si ses MP sont fermés)."
+        },
+        {
+          "key": "salon_liaison_id",
+          "label": "Salon de liaison",
+          "type": "channel",
+          "default": 0,
+          "help": "Où demander le pseudo quand les MP sont fermés. /liaison-panneau y publie un bouton permanent."
+        },
+        {
           "key": "salon_validation_id",
           "label": "Salon de validation des /lier",
           "type": "channel",
@@ -148,6 +169,13 @@
           "default": 5,
           "min": 1,
           "max": 60
+        },
+        {
+          "key": "salon_en_ligne_id",
+          "label": "Salon « en jeu » (têtes des membres connectés)",
+          "type": "channel",
+          "default": 0,
+          "help": "Une image avec la tête du skin, le pseudo et le grade de chaque membre du pays connecté, mise à jour aux 5 minutes."
         },
         {
           "key": "salon_annonces_id",
@@ -366,6 +394,29 @@
           "type": "lines",
           "default": [],
           "help": "Le bot compte déjà les entreprises dont le propriétaire est membre du pays. Ajoute ici celles d'un allié ou d'un ancien membre."
+        }
+      ]
+    },
+    {
+      "id": "ng_entreprises",
+      "section": "ng",
+      "title": "NationsGlory : entreprises",
+      "icon": "🏢",
+      "description": "Rôles Discord des entreprises du pays : le patron et ses employés (ajoutés avec /employe ajouter).",
+      "fields": [
+        {
+          "key": "roles_entreprises",
+          "label": "Un rôle Discord par entreprise du pays",
+          "type": "bool",
+          "default": false,
+          "help": "Crée « 🏢 Nom » pour chaque entreprise du pays, donné au patron (compte lié) et aux employés. Retiré si l'entreprise quitte le pays (le rôle est jamais supprimé)."
+        },
+        {
+          "key": "role_patron_id",
+          "label": "Rôle « Patron »",
+          "type": "role",
+          "default": 0,
+          "help": "Donné aux comptes liés qui possèdent une entreprise sur le serveur NationsGlory."
         }
       ]
     }
