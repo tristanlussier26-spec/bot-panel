@@ -262,3 +262,76 @@ def report_fields(previous: dict | None, now: dict) -> list[tuple[str, str]]:
             moves.append(f"🚪 Départs ({len(left)}) : " + ", ".join(left[:20]) + ("…" if len(left) > 20 else ""))
         fields.append(("Mouvements", "\n".join(moves) or "Aucune arrivée ni départ."))
     return fields
+
+
+# ---------------------------------------------------------------- options de veille (1.7.0)
+def plain(text) -> str:
+    """Minuscules sans accents ni espaces superflus (« Blé » == « ble »)."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
+    return " ".join(text.lower().replace("_", " ").split())
+
+
+def cereal_wanted(code: str | None, wanted: list[str]) -> bool:
+    """La céréale fait partie de la liste (code de l'API, nom court ou nom affiché, sans tenir compte des accents)."""
+    names = {plain(code), plain(str(code or "").removeprefix("cereal_")), plain(cereal_name(code))}
+    return any(plain(w) in names for w in wanted)
+
+
+def money(cents) -> str:
+    """Prix de l'hôtel des ventes (en centièmes de $)."""
+    if not isinstance(cents, int):
+        return "?"
+    return f"{cents / 100:,.2f} $".replace(",", " ").replace(".00 $", " $")
+
+
+def hdv_pick(query: str, rows: list[dict]) -> dict | None:
+    """L'objet de l'HDV qui correspond le mieux à ce qu'on surveille (nom exact, sinon le premier résultat)."""
+    rows = [r for r in rows if isinstance(r, dict) and r.get("item")]
+    return next((r for r in rows if plain(r.get("name")) == plain(query)), rows[0] if rows else None)
+
+
+def hdv_moves(reference: dict[str, int] | None, items: list[dict], threshold_pct: int) -> tuple[list[str], dict[str, int]]:
+    """Objets surveillés dont le prix du jour a bougé d'au moins `threshold_pct` % depuis la dernière alerte.
+    Retourne (lignes, nouveaux prix de référence). Rien au premier tour."""
+    ref = dict(reference or {})
+    lines = []
+    for item in items:
+        code = str(item.get("item") or "")
+        price = item.get("last_day_median_cents")
+        if not isinstance(price, int):
+            price = item.get("price_cents")
+        if not code or not isinstance(price, int) or price <= 0:
+            continue
+        before = ref.get(code)
+        if reference is None or not isinstance(before, int) or before <= 0:
+            ref[code] = price
+            continue
+        change = (price - before) * 100 / before
+        if abs(change) >= max(1, threshold_pct):
+            arrow = "📈" if change > 0 else "📉"
+            lines.append(f"{arrow} {bold(item.get('name') or code)} : {money(before)} → {money(price)} ({change:+.0f} %)")
+            ref[code] = price
+    return lines, ref
+
+
+def lottery_events(previous: dict[str, str] | None, rows: list[dict]) -> tuple[list[tuple[str, dict]], dict[str, str]]:
+    """Nouvelles loteries et loteries terminées depuis le tour d'avant : ([("nouvelle"|"finie", loterie)], états).
+    Au premier tour, on prend note sans rien annoncer."""
+    now = {str(r["lottery_id"]): str(r.get("state") or "") for r in rows if isinstance(r, dict) and r.get("lottery_id")}
+    if previous is None:
+        return [], now
+    events = []
+    for r in rows:
+        lid = str(r.get("lottery_id") or "")
+        if not lid:
+            continue
+        state, before = now[lid], previous.get(lid)
+        if before is None and state != "past":
+            events.append(("nouvelle", r))
+        elif state == "past" and before is not None and before != "past":
+            events.append(("finie", r))
+    keep = {k: v for k, v in previous.items() if k not in now}  # l'API oublie les vieilles : on garde 100 états
+    keep.update(now)
+    return events, dict(list(keep.items())[-100:])

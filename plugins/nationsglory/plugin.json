@@ -2,7 +2,7 @@
   "format": 1,
   "id": "nationsglory",
   "name": "Synchro NationsGlory",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Tout NationsGlory dans Discord : grades ↔ rôles avec liaison automatique des comptes, fiches des membres et des entreprises, rôles d'entreprise et employés, salon des membres en jeu avec leurs têtes, alertes de guerre, de power et de diplomatie, rapport du jour, warzone, marché, HDV, classements. Une seule clé de l'API officielle pour tous les serveurs.",
   "author": "tristanlussier26-spec",
   "runtime": "discord.py",
@@ -112,6 +112,20 @@
           "default": true
         },
         {
+          "key": "format_surnom",
+          "label": "Format du surnom",
+          "type": "text",
+          "default": "{pseudo}",
+          "help": "Variables : {pseudo}, {grade} et {pays}. Ex. « [{grade}] {pseudo} » donne « [Officier] Tristan_QC ». 32 caractères au plus : si c'est trop long, le bot met juste le pseudo."
+        },
+        {
+          "key": "roles_sans_surnom",
+          "label": "Jamais renommer ces rôles",
+          "type": "roles",
+          "default": [],
+          "help": "Ex. le Staff : le bot touche pas à leur surnom. Leurs grades sont quand même synchronisés."
+        },
+        {
           "key": "liaison_auto",
           "label": "Liaison automatique par le nom",
           "type": "bool",
@@ -124,6 +138,13 @@
           "type": "bool",
           "default": true,
           "help": "À son arrivée, le bot envoie un MP avec un bouton « Lier mon compte » (ou l'écrit dans le salon de liaison si ses MP sont fermés)."
+        },
+        {
+          "key": "mp_liaison",
+          "label": "Prévenir le membre en MP quand son compte est lié",
+          "type": "bool",
+          "default": true,
+          "help": "Liaison automatique, liaison validée, refusée ou annulée par un officier."
         },
         {
           "key": "salon_liaison_id",
@@ -178,11 +199,48 @@
           "help": "Une image avec la tête du skin, le pseudo et le grade de chaque membre du pays connecté, mise à jour aux 5 minutes."
         },
         {
+          "key": "en_jeu_minutes",
+          "label": "Mise à jour du salon « en jeu » aux X minutes",
+          "type": "int",
+          "default": 5,
+          "min": 5,
+          "max": 60,
+          "help": "NationsGlory publie la liste des connectés aux 5 minutes : plus souvent servirait à rien."
+        },
+        {
+          "key": "en_jeu_tetes",
+          "label": "Image avec les têtes des joueurs",
+          "type": "bool",
+          "default": true,
+          "help": "Décoché : juste la liste des noms, par grade."
+        },
+        {
+          "key": "en_jeu_allies",
+          "label": "Montrer aussi les comptes liés hors du pays",
+          "type": "bool",
+          "default": false,
+          "help": "Les alliés et invités du Discord qui ont lié leur compte et sont en jeu apparaissent sous « Hors du pays »."
+        },
+        {
           "key": "salon_annonces_id",
           "label": "Salon des annonces du pays",
           "type": "channel",
           "default": 0,
           "help": "Ex. #général. Aucun = pas d'annonces."
+        },
+        {
+          "key": "role_annonces_id",
+          "label": "Rôle à mentionner dans les annonces",
+          "type": "role",
+          "default": 0,
+          "help": "Ex. « 📣 Événements ». Aucun = pas de mention de rôle."
+        },
+        {
+          "key": "message_arrivee",
+          "label": "Message des nouvelles recrues",
+          "type": "text",
+          "default": "👋 {joueur} rejoint **{pays}** comme {grade}!",
+          "help": "Variables : {joueur} (le pseudo, et son Discord s'il est lié), {pays} et {grade}."
         },
         {
           "key": "annoncer_arrivees",
@@ -195,6 +253,12 @@
           "label": "Annoncer les promotions",
           "type": "bool",
           "default": true
+        },
+        {
+          "key": "annoncer_retrogradations",
+          "label": "Annoncer les rétrogradations",
+          "type": "bool",
+          "default": false
         },
         {
           "key": "annoncer_departs",
@@ -233,10 +297,37 @@
           "help": "Mentionné quand on nous déclare la guerre, qu'on passe sous le power ou qu'un ennemi devient attaquable."
         },
         {
+          "key": "mention_alertes",
+          "label": "Quand mentionner ce rôle",
+          "type": "select",
+          "default": "graves",
+          "choices": [
+            [
+              "graves",
+              "Alertes graves seulement (guerre déclarée, sous le power…)"
+            ],
+            [
+              "toutes",
+              "À chaque alerte"
+            ],
+            [
+              "jamais",
+              "Jamais"
+            ]
+          ]
+        },
+        {
           "key": "annoncer_assauts",
           "label": "Annoncer les assauts gagnés et perdus",
           "type": "bool",
           "default": true
+        },
+        {
+          "key": "salon_assauts_id",
+          "label": "Salon des assauts (optionnel)",
+          "type": "channel",
+          "default": 0,
+          "help": "Les assauts gagnés et perdus vont ici. Aucun = dans le salon des guerres."
         },
         {
           "key": "alerte_power",
@@ -265,6 +356,14 @@
           "type": "channel",
           "default": 0,
           "help": "Le top 10 de la journée et le rang du pays, publié après la clôture à 20 h (heure de Paris)."
+        },
+        {
+          "key": "warzone_top",
+          "label": "Nombre de pays dans le classement warzone",
+          "type": "int",
+          "default": 10,
+          "min": 3,
+          "max": 25
         },
         {
           "key": "warzone_semaine",
@@ -303,6 +402,22 @@
           "default": 22,
           "min": 0,
           "max": 23
+        },
+        {
+          "key": "frequence_rapport",
+          "label": "Fréquence du rapport",
+          "type": "select",
+          "default": "jour",
+          "choices": [
+            [
+              "jour",
+              "Chaque jour"
+            ],
+            [
+              "semaine",
+              "Chaque dimanche (variations de la semaine)"
+            ]
+          ]
         },
         {
           "key": "fuseau",
@@ -367,6 +482,41 @@
           "max": 500
         },
         {
+          "key": "cereales_suivies",
+          "label": "Céréales à surveiller (une par ligne)",
+          "type": "lines",
+          "default": [],
+          "help": "Vide = toutes. Ex. blé, maïs."
+        },
+        {
+          "key": "salon_hdv_id",
+          "label": "Salon des alertes de l'hôtel des ventes",
+          "type": "channel",
+          "default": 0
+        },
+        {
+          "key": "objets_hdv",
+          "label": "Objets de l'HDV à surveiller (un par ligne)",
+          "type": "lines",
+          "default": [],
+          "help": "Ex. Diamant. Alerte quand le prix du jour bouge plus que le seuil depuis la dernière alerte. 10 objets au plus, vérifiés aux 30 minutes."
+        },
+        {
+          "key": "seuil_hdv",
+          "label": "Variation du prix HDV pour une alerte (%)",
+          "type": "int",
+          "default": 15,
+          "min": 1,
+          "max": 500
+        },
+        {
+          "key": "salon_loteries_id",
+          "label": "Salon des loteries",
+          "type": "channel",
+          "default": 0,
+          "help": "Chaque nouvelle loterie (cagnotte, prix du ticket, fin) et ses gagnants."
+        },
+        {
           "key": "role_en_jeu_id",
           "label": "Rôle « connecté en jeu »",
           "type": "role",
@@ -387,6 +537,13 @@
           "default": 14,
           "min": 1,
           "max": 90
+        },
+        {
+          "key": "mp_inactifs",
+          "label": "MP aux membres qui deviennent inactifs",
+          "type": "bool",
+          "default": false,
+          "help": "Une seule fois, quand le membre reçoit le rôle « inactif »."
         },
         {
           "key": "entreprises_pays",
@@ -419,6 +576,40 @@
           "help": "Aucune = le bot crée la catégorie « 🏢 Entreprises » (lecture seule ; le rôle de l'entreprise peut écrire dans son salon)."
         },
         {
+          "key": "entreprises_minutes",
+          "label": "Mise à jour des salons aux X minutes",
+          "type": "int",
+          "default": 30,
+          "min": 10,
+          "max": 240
+        },
+        {
+          "key": "salons_prives",
+          "label": "Salons d'entreprise privés",
+          "type": "bool",
+          "default": false,
+          "help": "Seuls le patron et les employés (le rôle de l'entreprise) voient le salon de leur entreprise. Le résumé reste visible par tous. Il faut cocher « Un rôle Discord par entreprise »."
+        },
+        {
+          "key": "employes_ecrivent",
+          "label": "Le patron et les employés peuvent écrire dans leur salon",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "stats_courbe",
+          "label": "Courbe du chiffre d'affaires sur 30 jours",
+          "type": "bool",
+          "default": true
+        },
+        {
+          "key": "stats_activite",
+          "label": "Récoltes, production et parcelles",
+          "type": "bool",
+          "default": true,
+          "help": "Selon le type d'entreprise. Décoché : moins de requêtes à l'API."
+        },
+        {
           "key": "roles_entreprises",
           "label": "Un rôle Discord par entreprise du pays",
           "type": "bool",
@@ -431,6 +622,43 @@
           "type": "role",
           "default": 0,
           "help": "Donné aux comptes liés qui possèdent une entreprise sur le serveur NationsGlory."
+        },
+        {
+          "key": "role_employe_id",
+          "label": "Rôle « Employé »",
+          "type": "role",
+          "default": 0,
+          "help": "Donné aux membres ajoutés avec /employe dans une entreprise du pays (les patrons ont le rôle « Patron »)."
+        }
+      ]
+    },
+    {
+      "id": "ng_commandes",
+      "section": "ng",
+      "title": "NationsGlory : commandes",
+      "icon": "⌨️",
+      "description": "Qui peut utiliser les commandes NationsGlory (/pays, /membre, /entreprise, /marche…) et où.",
+      "fields": [
+        {
+          "key": "reponses_privees",
+          "label": "Réponses visibles seulement par la personne",
+          "type": "bool",
+          "default": false,
+          "help": "Les commandes d'information répondent en privé au lieu de dans le salon."
+        },
+        {
+          "key": "salons_commandes",
+          "label": "Salons où les commandes sont permises",
+          "type": "channels",
+          "default": [],
+          "help": "Vide = partout. Les commandes de liaison (/lier, /delier, /compte) et le staff (Gérer le serveur) marchent partout."
+        },
+        {
+          "key": "role_commandes_id",
+          "label": "Rôle requis pour les commandes",
+          "type": "role",
+          "default": 0,
+          "help": "Ex. « Vérifié » ou « Citoyen ». Aucun = tout le monde. Les commandes de liaison restent ouvertes à tous."
         }
       ]
     }

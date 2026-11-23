@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from . import alerts, entreprises, insights, veille
-from .common import BLUE, GREEN, RED, NationsGloryError, reply, truncate
+from .common import BLUE, GREEN, RED, CommandRefused, NationsGloryError, reply, truncate
 from .logic import RANK_LABELS
 
 ORANGE = 0xE67E22
@@ -65,6 +65,15 @@ class NGInfos(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Options « NationsGlory : commandes » : salons permis et rôle requis."""
+        from .cog import command_refusal
+
+        sync = self.bot.get_cog("NGSync")
+        if problem := command_refusal(sync.state(interaction.guild_id) if sync else None, interaction):
+            raise CommandRefused(problem)
+        return True
+
     async def _st(self, interaction: discord.Interaction):
         sync = self.bot.get_cog("NGSync")
         if sync is None:
@@ -101,7 +110,7 @@ class NGInfos(commands.Cog):
             return await reply(interaction, "Choix invalide.")
         if stat in LONG_ONLY and periode not in ("90d", "1y"):
             periode = "90d"
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         target = await self._country(interaction, st, pays)
         if target is None:
             return
@@ -118,7 +127,7 @@ class NGInfos(commands.Cog):
             embed.add_field(name="Variation", value=veille.signed(summary["delta"], suffix))
             embed.add_field(name="Min · Max", value=f"{veille.fmt(summary['min'], suffix)} · {veille.fmt(summary['max'], suffix)}")
         embed.set_footer(text="Séries historiques de l'API NationsGlory")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /comparer --------------------------------------------------------------------------------
     @app_commands.command(name="comparer", description="Compare deux pays côte à côte")
@@ -129,7 +138,7 @@ class NGInfos(commands.Cog):
         _, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         a = await self._country(interaction, st, avec)
         b = await self._country(interaction, st, pays) if a else None
         if not a or not b:
@@ -160,7 +169,7 @@ class NGInfos(commands.Cog):
             embed.description = f"🤝 {b[1]} est un allié de {a[1]}."
         elif b[0] in (rel.get("enemies") or []):
             embed.description = f"⚔️ {b[1]} est un ennemi de {a[1]}."
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /joueur ----------------------------------------------------------------------------------
     @app_commands.command(name="joueur", description="La fiche d'un joueur NationsGlory : pays, temps de jeu, connexions")
@@ -230,7 +239,7 @@ class NGInfos(commands.Cog):
         _, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         cid = await st.country()
         rows = await st.api.warzone_live()
         _, top, ours = alerts.warzone_summary(rows, cid)
@@ -243,7 +252,7 @@ class NGInfos(commands.Cog):
         if rows and rows[0].get("as_of"):
             embed.add_field(name="Calculé", value=when(rows[0]["as_of"]), inline=False)
         embed.set_footer(text="La journée se termine à 20 h, heure de Paris (14 h au Québec)")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /competences -----------------------------------------------------------------------------
     @app_commands.command(name="competences", description="Classement des compétences, avec les membres du pays")
@@ -254,7 +263,7 @@ class NGInfos(commands.Cog):
         _, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         rows = await st.api.skills("weekly" if semaine else "live")
         members = await st.members(max_age=300)
         title = "la dernière semaine" if semaine else "cette semaine"
@@ -282,7 +291,7 @@ class NGInfos(commands.Cog):
             if not embed.fields:
                 embed.description = "Aucun membre du pays dans les tops 50 pour l'instant."
         embed.set_footer(text="⭐ = membre du pays · top 50 publié par NationsGlory")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /marche ----------------------------------------------------------------------------------
     @app_commands.command(name="marche", description="Les prix du marché des céréales")
@@ -292,7 +301,7 @@ class NGInfos(commands.Cog):
         _, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         rows = await st.api.market()
         if cereale:
             wanted = cereale.strip().lower()
@@ -315,13 +324,13 @@ class NGInfos(commands.Cog):
                     embed.add_field(name="Vendu hier", value=veille.fmt(sales.get(days[-1])))
             else:
                 embed.description = "Pas d'historique publié pour cette céréale."
-            return await reply(interaction, embed=embed, ephemeral=False)
+            return await reply(interaction, embed=embed, ephemeral=st.private_replies)
         lines = [f"{'📈' if r.get('trend') == '+' else '📉'} **{veille.cereal_name(r.get('cereal'))}** · {veille.fmt(r.get('price'))} $"
                  for r in sorted(rows, key=lambda r: -(r.get("price") or 0))]
         embed = discord.Embed(title=f"🌾 Marché des céréales · {st.api.server.capitalize()}", color=GOLD,
                               description="\n".join(lines) or "Marché vide.")
         embed.set_footer(text="📈/📉 = sens de la dernière variation · /marche <céréale> pour l'historique")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /hdv -------------------------------------------------------------------------------------
     @app_commands.command(name="hdv", description="Le prix d'un objet à l'hôtel des ventes")
@@ -331,7 +340,7 @@ class NGInfos(commands.Cog):
         _, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         rows = await st.api.hdv_search(objet, limit=6)
         if not rows:
             return await reply(interaction, f"Aucun objet « {objet} » échangé ces 30 derniers jours.")
@@ -363,7 +372,7 @@ class NGInfos(commands.Cog):
             embed.add_field(name="Autres résultats", inline=False,
                             value="\n".join(f"{r.get('name') or r.get('item')} · {money(r.get('last_day_median_cents'))}" for r in others))
         embed.set_footer(text=f"Objet {item.get('item')} · hôtel des ventes de {st.api.server.capitalize()}")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /loteries --------------------------------------------------------------------------------
     @app_commands.command(name="loteries", description="Les loteries en cours sur le serveur")
@@ -372,7 +381,7 @@ class NGInfos(commands.Cog):
         _, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         rows = await st.api.lotteries()
         live = [x for x in rows if x.get("state") != "past"]
         past = sorted((x for x in rows if x.get("state") == "past"), key=lambda x: str(x.get("ends_at") or ""), reverse=True)
@@ -400,7 +409,7 @@ class NGInfos(commands.Cog):
             embed.description = "Aucune loterie pour l'instant."
         elif not live:
             embed.description = "Aucune loterie en cours. Les dernières :"
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- Autocomplétion ---------------------------------------------------------------------------
     async def _member_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -443,7 +452,7 @@ class NGInfos(commands.Cog):
         sync, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         rows = await st.api.enterprises()
         members = await st.members(max_age=300)
         ours = {r["name"] for r in entreprises.country_enterprises(rows, members, st.extra_enterprises)}
@@ -454,7 +463,7 @@ class NGInfos(commands.Cog):
             embed = discord.Embed(title=f"🏆 {entreprises.type_label(type)} · top de {st.api.server.capitalize()}",
                                   description="\n".join(lines) or "Aucune entreprise de ce type.", color=GOLD)
             embed.set_footer(text=f"{len(pool)} entreprise(s) de ce type · ⭐ = du pays")
-            return await reply(interaction, embed=embed, ephemeral=False)
+            return await reply(interaction, embed=embed, ephemeral=st.private_replies)
         if joueur:
             mine = [r for r in rows if str(r.get("owner") or "").lower() == joueur.strip().lower()]
             title = f"🏢 Entreprises de {joueur}"
@@ -466,7 +475,7 @@ class NGInfos(commands.Cog):
         embed = discord.Embed(title=title, color=BLUE)
         if not mine:
             embed.description = "Aucune entreprise trouvée. (Seul le propriétaire d'une entreprise est publié par l'API.)"
-            return await reply(interaction, embed=embed, ephemeral=False)
+            return await reply(interaction, embed=embed, ephemeral=st.private_replies)
         embed.description = (f"**{tot['count']}** entreprise(s) · **{tot['employees']}** employé(s) · "
                              f"CA total **{veille.fmt(tot['turnover'])} $** · banques {veille.fmt(tot['bank'])} $\n"
                              + " · ".join(f"{entreprises.type_label(k)} {n}" for k, n in tot["by_type"].items()))
@@ -486,7 +495,7 @@ class NGInfos(commands.Cog):
         if len(mine) > 15:
             footer = f"… et {len(mine) - 15} autres · " + footer
         embed.set_footer(text=footer)
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /entreprise ------------------------------------------------------------------------------
     @app_commands.command(name="entreprise", description="La fiche complète d'une entreprise : finances, activité, historique")
@@ -496,7 +505,7 @@ class NGInfos(commands.Cog):
         sync, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         embed, data = await sync.enterprise_embed(interaction.guild.id, st, nom)
         if embed is None:
             return await reply(interaction, f"Je trouve pas l'entreprise **{nom}** sur {st.api.server.capitalize()}.")
@@ -527,7 +536,7 @@ class NGInfos(commands.Cog):
             if link is None:
                 return await reply(interaction, "Donne un pseudo, ou lie ton compte avec `/lier`.")
             pseudo = link["ng_name"]
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         members = await st.members(max_age=300)
         key = pseudo.strip().lower()
         m = members.get(key)
@@ -584,7 +593,7 @@ class NGInfos(commands.Cog):
         if link := await sync.store.get_link_by_name(interaction.guild.id, name):
             embed.add_field(name="Discord", value=f"<@{link['discord_id']}>")
         embed.set_footer(text="Fiche publique NationsGlory · activité au jour près")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     @membre.autocomplete("pseudo")
     async def _membre_pseudo(self, interaction: discord.Interaction, current: str):
@@ -603,7 +612,7 @@ class NGInfos(commands.Cog):
         sync, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         members = await st.members(max_age=300)
         online = await st.api.online()
         logins = await sync._logins(st)
@@ -625,7 +634,7 @@ class NGInfos(commands.Cog):
         embed = discord.Embed(title=f"👥 {st.country_name} · {len(rows)} membres · 🟢 {on} en jeu", color=BLUE,
                               description=truncate("\n".join(lines).strip(), 4000))
         embed.set_footer(text=f"Page {page}/{pages} · activité vérifiée pour {checked}/{len(rows)} membres · 🏢 = propriétaire d'entreprise")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /classement-membres ----------------------------------------------------------------------
     @app_commands.command(name="classement-membres", description="Le top des membres du pays : temps de jeu, succès, ancienneté")
@@ -638,7 +647,7 @@ class NGInfos(commands.Cog):
         sync, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         members = await st.members(max_age=300)
         logins = await sync._logins(st)
         owners = entreprises.owners_index(await st.api.enterprises())
@@ -661,7 +670,7 @@ class NGInfos(commands.Cog):
         embed = discord.Embed(title=f"{title} · {st.country_name}", color=GOLD,
                               description="\n".join(lines) or "Pas encore de données : le bot lit les fiches des membres petit à petit.")
         embed.set_footer(text=f"Fiches lues : {checked}/{len(rows)} membres (une aux 30 secondes, relues aux 12 h)")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- /employe ... : les employés des entreprises (l'API les nomme pas) ----------------------
     employe = app_commands.Group(name="employe", description="Les employés des entreprises du pays (et leur rôle Discord)",
@@ -727,7 +736,7 @@ class NGInfos(commands.Cog):
         sync, st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         rows = await sync.country_enterprises(st)
         if entreprise:
             rows = [r for r in rows if r["name"].lower() == entreprise.strip().lower()]
@@ -744,7 +753,7 @@ class NGInfos(commands.Cog):
         if not rows:
             embed.description = "Aucune entreprise du pays."
         embed.set_footer(text="Le patron ajoute ses employés avec /employe ajouter · l'API de NationsGlory les nomme pas")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     async def _country_enterprise_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         sync = self.bot.get_cog("NGSync")

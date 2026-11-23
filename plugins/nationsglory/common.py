@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import discord
+from discord import app_commands
 
 GREEN = 0x2ECC71
 RED = 0xE74C3C
@@ -13,6 +14,14 @@ class ServiceError(Exception):
     """Erreur prévue : le bot hôte montre `user_message` au membre et le détail dans la console."""
 
     user_message = "❌ Un service externe répond pas. Réessaie plus tard."
+
+
+class CommandRefused(app_commands.AppCommandError):
+    """Commande refusée par les options du serveur (salon ou rôle) : le bot hôte montre `user_message`."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.user_message = message
 
 
 class NationsGloryError(ServiceError):
