@@ -61,6 +61,30 @@ def build() -> tuple[dict, dict[str, bytes]]:
     return index, zips
 
 
+def obsolete_zips(existing: list[str], current: dict[str, bytes]) -> list[str]:
+    """Les zips à effacer. On garde la version d'avant de chaque plugin : un panel qui a encore
+    l'ancien index.json en cache (10 min, plus le cache de GitHub) peut quand même l'installer,
+    au lieu d'avoir « Le catalogue répond HTTP 404 »."""
+    def split(name: str) -> tuple[str, tuple[int, ...]] | None:
+        stem = name.removesuffix(".zip")
+        pid, _, version = stem.rpartition("-")
+        try:
+            return pid, tuple(int(x) for x in version.split("."))
+        except ValueError:
+            return None
+
+    current_ids = {split(n)[0]: split(n)[1] for n in current if split(n)}
+    keep: dict[str, tuple[tuple[int, ...], str]] = {}
+    for name in existing:
+        parsed = split(name)
+        if name in current or parsed is None or parsed[0] not in current_ids or parsed[1] >= current_ids[parsed[0]]:
+            continue
+        if parsed[0] not in keep or parsed[1] > keep[parsed[0]][0]:
+            keep[parsed[0]] = (parsed[1], name)
+    kept = {name for _, name in keep.values()}
+    return [n for n in existing if n not in current and n not in kept]
+
+
 def zip_contents(data: bytes) -> list[tuple[str, bytes]]:
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         return sorted((i.filename, z.read(i)) for i in z.infolist())
@@ -102,9 +126,8 @@ def main() -> int:
         print(f"Catalogue à jour : {len(zips)} plugin(s)")
         return 0
     DIST.mkdir(exist_ok=True)
-    for old in DIST.glob("*.zip"):
-        if old.name not in zips:
-            old.unlink()
+    for old in obsolete_zips(sorted(p.name for p in DIST.glob("*.zip")), zips):
+        (DIST / old).unlink()
     for name, data in zips.items():
         (DIST / name).write_bytes(data)
     INDEX.write_text(text, encoding="utf-8")
