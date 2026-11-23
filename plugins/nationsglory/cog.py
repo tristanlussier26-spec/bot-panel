@@ -33,7 +33,7 @@ from .api import NationsGlory, RateLimiter, normalize_target
 from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, make_embed, reply, truncate
 from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
 from .store import Store
-from .veille_run import FORUM_EVERY, MARKET_EVERY, VeilleMixin
+from .veille_run import ENTERPRISES_EVERY, FORUM_EVERY, MARKET_EVERY, VeilleMixin
 
 log = logging.getLogger("plugin.nationsglory")
 
@@ -178,6 +178,9 @@ class GuildNG:
         self.ingame_role_id = chan("role_en_jeu_id")
         self.inactive_role_id = chan("role_inactif_id")
         self.inactive_days = max(1, int(cfg.get("jours_inactif", 14) or 14))
+        self.announce_enterprises = bool(cfg.get("annoncer_entreprises", True))
+        self.extra_enterprises = [str(x).strip() for x in cfg.get("entreprises_pays") or [] if str(x).strip()][:50]
+        self.last_enterprises = -1e9
         self.last_report_day: str | None = None
         self.last_forum = -1e9
         self.last_market = -1e9
@@ -500,6 +503,9 @@ class NGSync(VeilleMixin, commands.Cog):
             if st.forum_channel_id and now - st.last_forum >= FORUM_EVERY:
                 st.last_forum = now
                 steps.append(("forum", self.run_forum))
+            if st.announce_channel_id and st.announce_enterprises and now - st.last_enterprises >= ENTERPRISES_EVERY:
+                st.last_enterprises = now
+                steps.append(("entreprises", self.run_enterprises))
             if st.market_channel_id and now - st.last_market >= MARKET_EVERY:
                 st.last_market = now
                 steps.append(("marché", self.run_market))
@@ -794,8 +800,15 @@ class NGSync(VeilleMixin, commands.Cog):
         if name is None:
             await self._save(self._activity_key(st), logins)
             return None
-        value = await st.api.last_login(name)
-        logins[name.lower()] = [value or "none", now]
+        # La fiche publique donne d'un coup la dernière connexion ici, le temps de jeu, les succès et le grade
+        # boutique. Un joueur sans compte sur le site a pas de fiche (404) : on lit juste sa dernière connexion.
+        profile = await st.api.profile(name, max_age=60)
+        fallback = None
+        here = next((x for x in (profile or {}).get("servers") or []
+                     if isinstance(x, dict) and x.get("server") == st.api.server), {})
+        if profile is None or (not profile.get("private") and not here.get("last_login_on")):
+            fallback = await st.api.last_login(name)
+        logins[name.lower()] = insights.profile_entry(profile, st.api.server, fallback, now)
         await self._save(self._activity_key(st), logins)
         return name
 

@@ -269,6 +269,27 @@ async def api_url(unused_tcp_port):
             return web.json_response({"status": 404}, status=404)
         return web.json_response({"data": PROFILE})
 
+    async def enterprise(request):
+        row = next((r for r in ENTERPRISES if r["name"] == request.match_info["name"]), None)
+        if row is None:
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": {**row, "description": "La ferme de Sakhaline", "services": "Blé et maïs",
+                                           "disputes": 0, "contracts_in_progress_value": 5000,
+                                           "flows_14d": {"net": 12000, "salaries": -3000, "taxes": -800}}})
+
+    async def enterprise_ops(request):
+        if request.match_info["name"] != "AFR":
+            return web.json_response({"data": []})
+        return web.json_response({"data": [{"enterprise": "AFR", "kind": "farm", "trader": None, "bet": None, "farm": {
+            "history": {"wheat": {"2026-11-20": 100, "2026-11-21": 150, "2026-11-22": 90}, "corn": {"2026-11-22": 40}},
+            "top": {"wheat": 5000, "corn": 1200}, "today_collected": 130, "total_collected": 6200}}]})
+
+    async def enterprise_energy(request):
+        return web.json_response({"status": 404}, status=404)
+
+    async def enterprise_parcels(request):
+        return web.json_response({"data": []})
+
     async def status(request):
         return web.json_response({"data": {"server": "jade", "domains": STATUS}})
 
@@ -306,6 +327,10 @@ async def api_url(unused_tcp_port):
     app.router.add_get("/v1/servers/jade/hdv/items/{item}", hdv_item)
     app.router.add_get("/v1/servers/jade/lotteries", lotteries)
     app.router.add_get("/v1/servers/jade/enterprises", enterprises)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}", enterprise)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}/operations", enterprise_ops)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}/energy", enterprise_energy)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}/parcels", enterprise_parcels)
     app.router.add_get("/v1/servers/jade/rankings/warzone/live", warzone_live)
     app.router.add_get("/v1/servers/jade/rankings/skills/{period}", skills)
     app.router.add_get("/v1/players/{name}", profile)
@@ -1136,7 +1161,7 @@ async def test_info_commands(host):
     assert "Aucun objet" in await run(infos.hdv, "licorne")
     embed = await run(infos.loteries)
     assert embed.fields[0].name == "Loterie p30" and "Gagnant_1" in embed.fields[0].value
-    embed = await run(infos.entreprises, None)
+    embed = await run(infos.entreprises_cmd, None, None)
     assert [f.name for f in embed.fields] == ["🟢 AFR"] and "132 664" in embed.description
     i = inter(guild, user)
     await infos.statut_ng.callback(infos, i)
@@ -1145,3 +1170,121 @@ async def test_info_commands(host):
     await infos.rapport.callback(infos, i)
     assert said(i).title == "📰 Rapport du jour · Amour"
     assert await cog.store.get_value("ng_rapport:555") is None  # un aperçu change pas le prochain rapport
+
+
+# ---------------------------------------------------------------- entreprises et membres
+from plugins.nationsglory import entreprises  # noqa: E402
+
+
+def test_enterprises_logic():
+    members = {m["username"].lower(): m for m in MEMBERS}
+    ours = entreprises.country_enterprises(ENTERPRISES, members, ["autre"])
+    assert [r["name"] for r in ours] == ["AFR", "Autre"]  # AFR par son propriétaire, Autre ajoutée à la main
+    tot = entreprises.totals(ours)
+    assert tot["count"] == 2 and tot["turnover"] == 132669 and tot["by_type"] == {"farm": 1, "trader": 1}
+    assert entreprises.rank(ENTERPRISES, "AFR") == (1, 2) and entreprises.rank(ENTERPRISES, "AFR", kind="farm") == (1, 1)
+    assert entreprises.enterprise_events(None, ours) == []
+    before = entreprises.snapshot(ours)
+    after = [dict(ENTERPRISES[0], owner="Bob"), {"name": "Neuve", "type": "electric", "owner": "Joueur_1"}]
+    lines = entreprises.enterprise_events(before, after)
+    assert "🏢 **Joueur_1** a fondé l'entreprise **Neuve** (⚡ Électricité)!" in lines
+    assert any("**Autre**" in x and "plus au pays" in x for x in lines)
+    assert "🔁 **AFR** change de propriétaire : Tristan_QC → **Bob**." in lines
+    assert entreprises.type_label("inconnu") == "🏢 Inconnu"
+
+
+def test_enterprise_activity_fields():
+    farm = [{"kind": "farm", "farm": {"history": {"wheat": {"2026-11-21": 10, "2026-11-22": 30}}, "top": {"wheat": 40},
+                                      "today_collected": 30, "total_collected": 40}}]
+    name, value = entreprises.operations_fields(farm)[0]
+    assert name == "🌾 Récoltes" and "**30**" in value and "Blé 40" in value
+    trader = [{"kind": "trader", "trader": {"history": {"2026-11-22": 120}, "today_bp": 120, "total_generated": 9000,
+                                            "total_investment": 50000, "investors_count": 4}}]
+    assert "+1.20 %" in entreprises.operations_fields(trader)[0][1]
+    energy = [{"kind": "electricity", "base_price": 12, "total_generated": 900,
+               "history_generated": {"2026-11-22": 40}, "history_collected": {"2026-11-22": 30}}]
+    assert entreprises.energy_fields(energy)[0][0] == "⚡ Électricité"
+    parcels = [{"parcel": "P1", "status": "to_rent", "price": 100, "price_unit": "per_day"}, {"parcel": "P2", "status": "rented"}]
+    title, value = entreprises.parcels_field(parcels)
+    assert title == "🏠 Parcelles (2)" and "P1 : à louer 100 $/jour" in value and entreprises.parcels_field([]) is None
+
+
+def test_member_logic():
+    entry = insights.profile_entry(PROFILE, "jade", None, 5.0)
+    assert entry == ["2026-11-01", 5.0, 3000, 150, "VIP", "2025-01-02", 6000]
+    assert insights.profile_entry({"private": True}, "jade", None, 1.0) == ["private", 1.0]
+    assert insights.profile_entry(None, "jade", "2026-11-20", 1.0) == ["2026-11-20", 1.0]
+    members = {"bob": {"username": "Bob", "role": "OFFICER"}, "zed": {"username": "Zed", "role": "RECRUIT"}}
+    rows = insights.member_rows(members, {"bob": entry}, {"zed"}, {"bob": [ENTERPRISES[0]]}, date(2026, 11, 22))
+    by = {r["name"]: r for r in rows}
+    assert by["Bob"]["days"] == 21 and by["Bob"]["playtime"] == 3000 and by["Zed"]["online"]
+    assert [r["name"] for r in insights.sort_members(rows, "activite")] == ["Zed", "Bob"]
+    assert [r["name"] for r in insights.sort_members(rows, "temps")] == ["Bob", "Zed"]
+    assert insights.member_line(by["Bob"]) == "😴 **Bob** · il y a 21 j · 50 h · 🏢"
+    assert insights.member_line(by["Zed"]) == "🟢 **Zed** · en jeu"
+
+
+async def test_enterprise_and_member_commands(host, monkeypatch):
+    bot, cog, _ = host
+    infos = bot.get_cog("NGInfos")
+    st, guild = await _setup_guild(bot, cog)
+    user = add_member(guild, 42)
+    monkeypatch.setattr(sys.modules["plugins.nationsglory.cog"], "paris_today", lambda: date(2026, 11, 22))
+
+    async def run(command, *args):
+        i = inter(guild, user)
+        await command.callback(infos, i, *args)
+        return i
+
+    i = await run(infos.entreprise, "AFR")
+    embed = i.followup.send.call_args.kwargs["embed"]
+    fields = {f.name: f.value for f in embed.fields}
+    assert embed.title == "🏢 AFR" and "Tristan_QC (Empereur de Amour)" in fields["👑 Propriétaire"]
+    assert fields["💸 14 derniers jours"].startswith("Net +12 000 $") and "1er sur" not in fields["🏆 Rang (chiffre d'affaires)"]
+    assert "🌾 Récoltes" in fields and "📈 CA sur 30 jours" in fields
+    i = await run(infos.entreprise, "afr")  # sans tenir compte de la casse
+    assert i.followup.send.call_args.kwargs["embed"].title == "🏢 AFR"
+    assert "trouve pas" in said(await run(infos.entreprise, "Licorne Inc"))
+
+    embed = said(await run(infos.entreprises_cmd, None, "farm"))
+    assert embed.title.startswith("🏆 🌾 Ferme") and "⭐ **AFR**" in embed.description
+    choices = await infos._enterprise_choices(inter(guild, user), "a")
+    assert choices[0].name == "⭐ AFR" and choices[0].value == "AFR"
+
+    for _ in range(8):
+        cog._last_activity.clear()
+        await cog.check_activity(st)
+    logins = await cog._logins(st)
+    assert logins["bob"][:3] == ["2026-11-01", logins["bob"][1], 3000]  # lu dans sa fiche publique
+
+    embed = said(await run(infos.membre, "bob"))
+    fields = {f.name: f.value for f in embed.fields}
+    assert embed.title == "⭐ Bob" and "**Conseiller** de **Amour**" in embed.description
+    assert fields["⏱️ Temps de jeu sur Jade"] == "50 h" and fields["💎 Grade boutique"] == "VIP"
+    assert "Mineur 2e" in fields["🛠️ Tops compétences (cette semaine)"]
+    assert "pas membre" in said(await run(infos.membre, "Inconnu_9"))
+    assert [c.value for c in await infos._member_choices(inter(guild, user), "jou")][:2] == ["Joueur_0", "Joueur_1"]
+
+    embed = said(await run(infos.membres, "grade", 1))
+    assert embed.title == "👥 Amour · 7 membres · 🟢 2 en jeu" and "__👑 Empereur__" in embed.description
+    assert "🟢 **Tristan_QC** · en jeu" in embed.description and "🏢" in embed.description
+    embed = said(await run(infos.classement_membres, "temps"))
+    assert embed.description.startswith("🥇 **Bob** · 50 h")
+    embed = said(await run(infos.classement_membres, "entreprises"))
+    assert embed.description.startswith("🥇 **Tristan_QC** · 132 664 $")
+
+
+async def test_enterprise_announcements(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_annonces_id": 70})
+    chan = SimpleNamespace(id=70, send=AsyncMock())
+    guild.channels[70] = chan
+    assert await cog.run_enterprises(guild, st) == []  # 1er tour
+    ENTERPRISES.append({"name": "SakhaElec", "type": "electric", "owner": "Bob", "is_open": True, "members_count": 5, "turnover": 10})
+    for c in cog.clients.values():
+        c._cached.pop("enterprises", None)
+    try:
+        lines = await cog.run_enterprises(guild, st)
+    finally:
+        ENTERPRISES.pop()
+    assert lines == ["🏢 **Bob** a fondé l'entreprise **SakhaElec** (⚡ Électricité)!"] and chan.send.await_count == 1

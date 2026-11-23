@@ -5,6 +5,7 @@ Un Cog à part (NGInfos) qui s'appuie sur l'état du Cog NGSync (le pays configu
 """
 from __future__ import annotations
 
+import io
 import re
 from datetime import datetime
 
@@ -12,8 +13,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from . import alerts, veille
-from .common import BLUE, GREEN, RED, NationsGloryError, reply, truncate
+from . import alerts, entreprises, insights, veille
+from .common import BLUE, GREEN, GREY, RED, NationsGloryError, reply, truncate
+from .logic import RANK_LABELS
 
 ORANGE = 0xE67E22
 GOLD = 0xF1C40F
@@ -400,41 +402,323 @@ class NGInfos(commands.Cog):
             embed.description = "Aucune loterie en cours. Les dernières :"
         await reply(interaction, embed=embed, ephemeral=False)
 
+    # ---- Autocomplétion ---------------------------------------------------------------------------
+    async def _member_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        sync = self.bot.get_cog("NGSync")
+        st = sync.state(interaction.guild_id) if sync else None
+        if st is None:
+            return []
+        try:
+            members = await st.members(max_age=300)
+        except Exception:  # noqa: BLE001 - l'autocomplétion doit jamais planter
+            return []
+        cur = current.lower()
+        names = sorted((m["username"] for k, m in members.items() if cur in k), key=lambda n: (not n.lower().startswith(cur), n.lower()))
+        return [app_commands.Choice(name=n, value=n) for n in names[:25]]
+
+    async def _enterprise_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        sync = self.bot.get_cog("NGSync")
+        st = sync.state(interaction.guild_id) if sync else None
+        if st is None:
+            return []
+        try:
+            rows = await st.api.enterprises()
+            ours = {r["name"] for r in await sync.country_enterprises(st)}
+        except Exception:  # noqa: BLE001
+            return []
+        cur = current.lower()
+        names = [str(r.get("name")) for r in rows if cur in str(r.get("name") or "").lower()]
+        names.sort(key=lambda n: (n not in ours, not n.lower().startswith(cur), n.lower()))
+        return [app_commands.Choice(name=("⭐ " if n in ours else "") + n, value=n) for n in names[:25]]
+
     # ---- /entreprises -----------------------------------------------------------------------------
-    @app_commands.command(name="entreprises", description="Les entreprises des membres du pays (ou d'un joueur)")
-    @app_commands.describe(joueur="Les entreprises d'un joueur précis")
+    @app_commands.command(name="entreprises", description="Toutes les entreprises du pays : chiffre d'affaires, banque, rangs")
+    @app_commands.describe(joueur="Les entreprises d'un joueur précis",
+                           type="Le top du serveur pour un type d'entreprise (ferme, électricité…)")
+    @app_commands.choices(type=[app_commands.Choice(name=label, value=key)
+                                for key, (_, label) in list(entreprises.TYPES.items())[:25]])
     @app_commands.guild_only()
-    async def entreprises(self, interaction: discord.Interaction, joueur: app_commands.Range[str, 1, 32] | None = None) -> None:
-        _, st = await self._st(interaction)
+    async def entreprises_cmd(self, interaction: discord.Interaction, joueur: app_commands.Range[str, 1, 32] | None = None,
+                              type: str | None = None) -> None:
+        sync, st = await self._st(interaction)
         if st is None:
             return
         await interaction.response.defer()
         rows = await st.api.enterprises()
+        members = await st.members(max_age=300)
+        ours = {r["name"] for r in entreprises.country_enterprises(rows, members, st.extra_enterprises)}
+        if type:  # top du serveur pour un type
+            pool = sorted((r for r in rows if r.get("type") == type), key=lambda r: -(r.get("turnover") or 0))
+            lines = [f"`{i + 1}.` {'⭐ ' if r['name'] in ours else ''}**{r['name']}** · {r.get('owner') or '?'} · "
+                     f"CA {veille.fmt(r.get('turnover'))} $" for i, r in enumerate(pool[:15])]
+            embed = discord.Embed(title=f"🏆 {entreprises.type_label(type)} · top de {st.api.server.capitalize()}",
+                                  description="\n".join(lines) or "Aucune entreprise de ce type.", color=GOLD)
+            embed.set_footer(text=f"{len(pool)} entreprise(s) de ce type · ⭐ = du pays")
+            return await reply(interaction, embed=embed, ephemeral=False)
         if joueur:
-            owners = {joueur.strip().lower()}
+            mine = [r for r in rows if str(r.get("owner") or "").lower() == joueur.strip().lower()]
             title = f"🏢 Entreprises de {joueur}"
         else:
-            owners = set(await st.members(max_age=300))
+            mine = entreprises.country_enterprises(rows, members, st.extra_enterprises)
             title = f"🏢 Entreprises de {st.country_name}"
-        mine = sorted((r for r in rows if str(r.get("owner") or "").lower() in owners),
-                      key=lambda r: -(r.get("turnover") or 0))
+        mine.sort(key=lambda r: -(r.get("turnover") or 0))
+        tot = entreprises.totals(mine)
         embed = discord.Embed(title=title, color=BLUE)
-        for r in mine[:15]:
-            bits = [f"{r.get('type') or '?'} · chef **{r.get('owner')}**", f"👥 {r.get('members_count', '?')}"]
-            if isinstance(r.get("turnover"), int):
-                bits.append(f"CA {veille.fmt(r['turnover'])} $")
-            if isinstance(r.get("bank_balance"), int):
-                bits.append(f"banque {veille.fmt(r['bank_balance'])} $")
-            if isinstance(r.get("contracts_done"), int):
-                bits.append(f"{r['contracts_done']} contrats ({r.get('contracts_success_pct', '?')} % réussis)")
-            embed.add_field(name=f"{'🟢' if r.get('is_open') else '🔒'} {r.get('name')}", value=" · ".join(bits), inline=False)
-        if len(mine) > 15:
-            embed.set_footer(text=f"… et {len(mine) - 15} autres")
         if not mine:
-            embed.description = "Aucune entreprise trouvée."
+            embed.description = "Aucune entreprise trouvée. (Seul le propriétaire d'une entreprise est publié par l'API.)"
+            return await reply(interaction, embed=embed, ephemeral=False)
+        embed.description = (f"**{tot['count']}** entreprise(s) · **{tot['employees']}** employé(s) · "
+                             f"CA total **{veille.fmt(tot['turnover'])} $** · banques {veille.fmt(tot['bank'])} $\n"
+                             + " · ".join(f"{entreprises.type_label(k)} {n}" for k, n in tot["by_type"].items()))
+        custom = await sync._role_names(st)
+        for r in mine[:15]:
+            pos, of = entreprises.rank(rows, r["name"], kind=r.get("type"))
+            owner = r.get("owner") or "?"
+            role = (members.get(owner.lower()) or {}).get("role")
+            bits = [f"{entreprises.type_label(r.get('type'))} · chef **{owner}**" + (f" ({custom.get(role) or role_label(role)})" if role else ""),
+                    f"CA {veille.fmt(r.get('turnover'))} $ · banque {veille.fmt(r.get('bank_balance'))} $ · 👥 {r.get('members_count', '?')}"]
+            if pos:
+                bits.append(f"{pos}e sur {of} {entreprises.TYPES.get(r.get('type'), ('', 'entreprises'))[1].lower()} du serveur")
+            if r.get("contracts_done"):
+                bits.append(f"{r['contracts_done']} contrat(s), {r.get('contracts_success_pct', '?')} % réussis")
+            embed.add_field(name=f"{'🟢' if r.get('is_open') else '🔒'} {r.get('name')}", value="\n".join(bits), inline=False)
+        footer = "/entreprise <nom> pour la fiche complète"
+        if len(mine) > 15:
+            footer = f"… et {len(mine) - 15} autres · " + footer
+        embed.set_footer(text=footer)
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    # ---- /entreprise ------------------------------------------------------------------------------
+    @app_commands.command(name="entreprise", description="La fiche complète d'une entreprise : finances, activité, historique")
+    @app_commands.describe(nom="Le nom exact de l'entreprise")
+    @app_commands.guild_only()
+    async def entreprise(self, interaction: discord.Interaction, nom: app_commands.Range[str, 1, 64]) -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        nom = nom.strip()
+        data = await st.api.enterprise(nom)
+        rows = await st.api.enterprises()
+        if data is None:
+            close = next((r["name"] for r in rows if str(r.get("name", "")).lower() == nom.lower()), None)
+            data = await st.api.enterprise(close) if close else None
+        if data is None:
+            return await reply(interaction, f"Je trouve pas l'entreprise **{nom}** sur {st.api.server.capitalize()}.")
+        name = data.get("name") or nom
+        embed = discord.Embed(title=f"🏢 {name}", color=GREEN if data.get("is_open") else GREY)
+        desc = [f"{entreprises.type_label(data.get('type'))} · {'🟢 ouverte' if data.get('is_open') else '🔒 fermée'}"
+                + (f" · fondée le {data['created_on']}" if data.get("created_on") else "")]
+        if data.get("description"):
+            desc.append(f"*{truncate(str(data['description']), 300)}*")
+        if data.get("services"):
+            desc.append(f"**Services :** {truncate(str(data['services']), 300)}")
+        embed.description = "\n".join(desc)
+        owner = data.get("owner") or "?"
+        members = await st.members(max_age=300)
+        who = owner
+        if owner.lower() in members:
+            custom = await sync._role_names(st)
+            role = members[owner.lower()].get("role")
+            who += f" ({custom.get(role) or role_label(role)} de {st.country_name})"
+        if link := await sync.store.get_link_by_name(interaction.guild.id, owner):
+            who += f" · <@{link['discord_id']}>"
+        embed.add_field(name="👑 Propriétaire", value=who, inline=False)
+        embed.add_field(name="💰 Chiffre d'affaires", value=f"{veille.fmt(data.get('turnover'))} $")
+        embed.add_field(name="🏦 Banque", value=f"{veille.fmt(data.get('bank_balance'))} $")
+        embed.add_field(name="👥 Membres", value=str(data.get("members_count", "?")))
+        contracts = f"{data.get('contracts_done', 0)} faits · {data.get('contracts_success_pct', '?')} % réussis"
+        if data.get("contracts_in_progress_value"):
+            contracts += f" · {veille.fmt(data['contracts_in_progress_value'])} $ en cours"
+        if data.get("disputes"):
+            contracts += f" · ⚠️ {data['disputes']} litige(s)"
+        embed.add_field(name="📝 Contrats", value=contracts, inline=False)
+        flows = data.get("flows_14d") or {}
+        if any(isinstance(flows.get(k), int) for k in ("net", "salaries", "taxes")):
+            embed.add_field(name="💸 14 derniers jours", inline=False,
+                            value=f"Net {veille.signed(flows.get('net'), ' $')} · salaires {veille.fmt(flows.get('salaries'))} $ · "
+                                  f"taxes {veille.fmt(flows.get('taxes'))} $")
+        pos, of = entreprises.rank(rows, name, kind=data.get("type"))
+        pos_all, of_all = entreprises.rank(rows, name)
+        if pos:
+            embed.add_field(name="🏆 Rang (chiffre d'affaires)", inline=False,
+                            value=f"{pos}e sur {of} de son type · {pos_all}e sur {of_all} au serveur")
+        points = await st.api.series("enterprise.turnover", name, "30d")
+        summary = veille.series_summary(points)
+        if summary:
+            embed.add_field(name="📈 CA sur 30 jours", inline=False,
+                            value=f"`{summary['spark']}`\n{veille.signed(summary['delta'], ' $')} · min {veille.fmt(summary['min'])} · max {veille.fmt(summary['max'])}")
+        extra = []
+        if data.get("type") in ("farm", "trader", "bet"):
+            extra += entreprises.operations_fields(await st.api.enterprise_operations(name))
+        if data.get("type") in ("electric", "petrol"):
+            extra += entreprises.energy_fields(await st.api.enterprise_energy(name))
+        if data.get("type") == "realestate":
+            if field := entreprises.parcels_field(await st.api.enterprise_parcels(name)):
+                extra.append(field)
+        for fname, value in extra[:5]:
+            embed.add_field(name=fname, value=truncate(value), inline=False)
+        files = []
+        try:
+            if png := await st.api.image(data.get("flag_sha256")):
+                files.append(discord.File(io.BytesIO(png), filename="drapeau.png"))
+                embed.set_thumbnail(url="attachment://drapeau.png")
+        except NationsGloryError:
+            pass
+        embed.set_footer(text=f"Entreprise de {st.api.server.capitalize()} · l'API nomme pas les employés")
+        await interaction.followup.send(embed=embed, files=files)
+
+    @entreprise.autocomplete("nom")
+    async def _entreprise_nom(self, interaction: discord.Interaction, current: str):
+        return await self._enterprise_choices(interaction, current)
+
+    # ---- /membre ----------------------------------------------------------------------------------
+    @app_commands.command(name="membre", description="La fiche complète d'un membre du pays")
+    @app_commands.describe(pseudo="Le pseudo NationsGlory (ou laisse vide pour toi si ton compte est lié)")
+    @app_commands.guild_only()
+    async def membre(self, interaction: discord.Interaction, pseudo: app_commands.Range[str, 1, 32] | None = None) -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        if not pseudo:
+            link = await sync.store.get_link(interaction.guild.id, interaction.user.id)
+            if link is None:
+                return await reply(interaction, "Donne un pseudo, ou lie ton compte avec `/lier`.")
+            pseudo = link["ng_name"]
+        await interaction.response.defer()
+        members = await st.members(max_age=300)
+        key = pseudo.strip().lower()
+        m = members.get(key)
+        if m is None:
+            return await reply(interaction, f"**{pseudo}** est pas membre de {st.country_name}. Essaie `/joueur {pseudo}`.")
+        name = m["username"]
+        custom = await sync._role_names(st)
+        online = await st.api.online()
+        logins = await sync._logins(st)
+        entry = logins.get(key)
+        profile = await st.api.profile(name)
+        if profile and not profile.get("private"):
+            entry = insights.profile_entry(profile, st.api.server, insights.entry_field(entry, 0), 0)
+        rows = await st.api.enterprises()
+        owned = [r for r in rows if str(r.get("owner") or "").lower() == key]
+        row = insights.member_rows({key: m}, {key: entry} if entry else {}, online, {key: owned}, sync._today())[0]
+
+        rank = m.get("role")
+        embed = discord.Embed(title=f"{RANK_EMOJI.get(rank, '👤')} {name}", color=BLUE,
+                              description=f"**{custom.get(rank) or role_label(rank)}** de **{st.country_name}**")
+        embed.set_thumbnail(url=(profile or {}).get("face_url") or f"https://files.recube.gg/nationsglory/face/{name}.png")
+        if row["online"]:
+            status = "🟢 Connecté en jeu"
+        elif row["login"] == "private":
+            status = "🔒 Profil privé"
+        elif row["login"] == "none":
+            status = "😴 Pas venu depuis plus de 90 jours"
+        elif row["days"] is not None:
+            status = "⚫ Venu aujourd'hui" if row["days"] == 0 else f"{'😴' if row['days'] >= 7 else '⚫'} Vu il y a {row['days']} jour(s) ({row['login']})"
         else:
-            total = sum(r.get("turnover") or 0 for r in mine)
-            embed.description = f"{len(mine)} entreprise(s) · chiffre d'affaires total {veille.fmt(total)} $"
+            status = "❔ Activité pas encore vérifiée"
+        embed.add_field(name="Activité", value=status, inline=False)
+        if isinstance(row["playtime"], int):
+            embed.add_field(name=f"⏱️ Temps de jeu sur {st.api.server.capitalize()}", value=insights.hours(row["playtime"]))
+        total = insights.entry_field(entry, 6)
+        if isinstance(total, int):
+            embed.add_field(name="⏱️ Temps de jeu total", value=insights.hours(total))
+        if row["first_join"]:
+            embed.add_field(name="📅 Première connexion", value=str(row["first_join"]))
+        if isinstance(row["achievements"], int):
+            embed.add_field(name="🏅 Succès", value=veille.fmt(row["achievements"]))
+        if row["grade"]:
+            embed.add_field(name="💎 Grade boutique", value=str(row["grade"]))
+        if owned:
+            embed.add_field(name=f"🏢 Entreprises ({len(owned)})", inline=False, value=truncate("\n".join(
+                f"{entreprises.type_label(r.get('type'))} **{r['name']}** · CA {veille.fmt(r.get('turnover'))} $" for r in owned)))
+        try:
+            skills = [r for r in await st.api.skills("live") if str(r.get("username") or "").lower() == key]
+            if skills:
+                embed.add_field(name="🛠️ Tops compétences (cette semaine)", inline=False, value=", ".join(
+                    f"{veille.SKILLS.get(r['skill'], r['skill'])} {r['rank']}e" for r in sorted(skills, key=lambda r: r["rank"])))
+        except NationsGloryError:
+            pass
+        if link := await sync.store.get_link_by_name(interaction.guild.id, name):
+            embed.add_field(name="Discord", value=f"<@{link['discord_id']}>")
+        embed.set_footer(text="Fiche publique NationsGlory · activité au jour près")
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    @membre.autocomplete("pseudo")
+    async def _membre_pseudo(self, interaction: discord.Interaction, current: str):
+        return await self._member_choices(interaction, current)
+
+    # ---- /membres ---------------------------------------------------------------------------------
+    @app_commands.command(name="membres", description="Tous les membres du pays : grade, activité, temps de jeu")
+    @app_commands.describe(tri="Comment les trier", page="Page (40 membres par page)")
+    @app_commands.choices(tri=[app_commands.Choice(name="Par grade", value="grade"),
+                               app_commands.Choice(name="Par activité (connectés d'abord)", value="activite"),
+                               app_commands.Choice(name="Par temps de jeu", value="temps"),
+                               app_commands.Choice(name="Par succès", value="succes"),
+                               app_commands.Choice(name="Par ancienneté", value="anciennete")])
+    @app_commands.guild_only()
+    async def membres(self, interaction: discord.Interaction, tri: str = "grade", page: app_commands.Range[int, 1, 50] = 1) -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        members = await st.members(max_age=300)
+        online = await st.api.online()
+        logins = await sync._logins(st)
+        owners = entreprises.owners_index(await st.api.enterprises())
+        rows = insights.sort_members(insights.member_rows(members, logins, online, owners, sync._today()), tri)
+        per_page = 40
+        pages = max(1, -(-len(rows) // per_page))
+        page = min(page, pages)
+        chunk = rows[(page - 1) * per_page: page * per_page]
+        custom = await sync._role_names(st)
+        lines, current = [], None
+        for r in chunk:
+            if tri == "grade" and r["role"] != current:
+                current = r["role"]
+                lines.append(f"\n__{RANK_EMOJI.get(current, '👤')} {custom.get(current) or role_label(current)}__")
+            lines.append(insights.member_line(r))
+        on = sum(1 for r in rows if r["online"])
+        checked = sum(1 for r in rows if r["login"] is not None)
+        embed = discord.Embed(title=f"👥 {st.country_name} · {len(rows)} membres · 🟢 {on} en jeu", color=BLUE,
+                              description=truncate("\n".join(lines).strip(), 4000))
+        embed.set_footer(text=f"Page {page}/{pages} · activité vérifiée pour {checked}/{len(rows)} membres · 🏢 = propriétaire d'entreprise")
+        await reply(interaction, embed=embed, ephemeral=False)
+
+    # ---- /classement-membres ----------------------------------------------------------------------
+    @app_commands.command(name="classement-membres", description="Le top des membres du pays : temps de jeu, succès, ancienneté")
+    @app_commands.choices(critere=[app_commands.Choice(name="Temps de jeu", value="temps"),
+                                   app_commands.Choice(name="Succès", value="succes"),
+                                   app_commands.Choice(name="Ancienneté", value="anciennete"),
+                                   app_commands.Choice(name="Chiffre d'affaires des entreprises", value="entreprises")])
+    @app_commands.guild_only()
+    async def classement_membres(self, interaction: discord.Interaction, critere: str = "temps") -> None:
+        sync, st = await self._st(interaction)
+        if st is None:
+            return
+        await interaction.response.defer()
+        members = await st.members(max_age=300)
+        logins = await sync._logins(st)
+        owners = entreprises.owners_index(await st.api.enterprises())
+        rows = insights.member_rows(members, logins, set(), owners, sync._today())
+        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+        if critere == "entreprises":
+            scored = [(r, sum(e.get("turnover") or 0 for e in r["enterprises"])) for r in rows if r["enterprises"]]
+            scored.sort(key=lambda x: -x[1])
+            lines = [f"{medals.get(i + 1, f'`{i + 1}.`')} **{r['name']}** · {veille.fmt(v)} $ ({len(r['enterprises'])} entreprise(s))"
+                     for i, (r, v) in enumerate(scored[:15])]
+            title = "💼 Les plus gros entrepreneurs"
+        else:
+            field = {"temps": "playtime", "succes": "achievements", "anciennete": "first_join"}[critere]
+            ranked = [r for r in insights.sort_members(rows, critere) if r[field]]
+            fmt_value = {"temps": lambda r: insights.hours(r["playtime"]), "succes": lambda r: f"{veille.fmt(r['achievements'])} pts",
+                         "anciennete": lambda r: f"depuis le {r['first_join']}"}[critere]
+            lines = [f"{medals.get(i + 1, f'`{i + 1}.`')} **{r['name']}** · {fmt_value(r)}" for i, r in enumerate(ranked[:15])]
+            title = {"temps": "⏱️ Temps de jeu", "succes": "🏅 Succès", "anciennete": "📅 Les plus anciens"}[critere]
+        checked = sum(1 for r in rows if r["login"] is not None)
+        embed = discord.Embed(title=f"{title} · {st.country_name}", color=GOLD,
+                              description="\n".join(lines) or "Pas encore de données : le bot lit les fiches des membres petit à petit.")
+        embed.set_footer(text=f"Fiches lues : {checked}/{len(rows)} membres (une aux 30 secondes, relues aux 12 h)")
         await reply(interaction, embed=embed, ephemeral=False)
 
     # ---- /statut-ng -------------------------------------------------------------------------------
@@ -472,7 +756,9 @@ class NGInfos(commands.Cog):
 
 
 def alerts_rank(role: str | None) -> str:
-    from .logic import RANK_LABELS
-
     return RANK_LABELS.get(role or "", role or "Sans grade")
+
+
+role_label = alerts_rank
+RANK_EMOJI = {"LEADER": "👑", "OFFICER": "⭐", "MEMBER": "🛡️", "RECRUIT": "🌱"}
 

@@ -10,13 +10,14 @@ from datetime import datetime, timezone
 
 import discord
 
-from . import alerts, insights, veille
+from . import alerts, entreprises, insights, veille
 from .common import BLUE, GREY, ServiceError, truncate
 from .logic import SyncPlan
 
 log = logging.getLogger("plugin.nationsglory")
 
 FORUM_EVERY = 10 * 60
+ENTERPRISES_EVERY = 10 * 60
 MARKET_EVERY = 15 * 60
 NEWS_COLOR = 0x5865F2
 
@@ -130,6 +131,16 @@ class VeilleMixin:
         peak = await self._load(f"ng_pic:{guild.id}") or {}
         if peak.get("max"):
             extra.append(f"🟢 Pic de membres en ligne : {peak['max']}")
+        try:
+            ents = await self.country_enterprises(st, members)
+            tot = entreprises.totals(ents)
+            before = (previous or {}).get("entreprises_ca")
+            delta = f" ({veille.signed(tot['turnover'] - before, ' $')})" if isinstance(before, int) else ""
+            if tot["count"]:
+                extra.append(f"🏢 {tot['count']} entreprise(s) · chiffre d'affaires {veille.fmt(tot['turnover'])} ${delta}")
+            now["entreprises_ca"] = tot["turnover"]
+        except ServiceError:
+            pass
         logins = await self._logins(st)
         if logins:
             report = insights.inactivity(members, logins, self._today(), 7)
@@ -190,6 +201,23 @@ class VeilleMixin:
             embed.set_footer(text="Forum NationsGlory")
             await channel.send(embed=embed)
         return len(fresh[-5:])
+
+    # ---- Entreprises du pays : fondations, fermetures, changements de propriétaire -------------------
+    async def country_enterprises(self, st, members: dict[str, dict] | None = None) -> list[dict]:
+        members = members if members is not None else await st.members(max_age=300)
+        return entreprises.country_enterprises(await st.api.enterprises(), members, st.extra_enterprises)
+
+    async def run_enterprises(self, guild: discord.Guild, st) -> list[str]:
+        rows = await self.country_enterprises(st)
+        key = f"ng_entreprises:{guild.id}"
+        lines = entreprises.enterprise_events(await self._load(key), rows)
+        await self._save(key, entreprises.snapshot(rows))
+        if not lines:
+            return []
+        channel = self._channel(guild, st.announce_channel_id, st, "annonces du pays")
+        if channel is not None:
+            await channel.send("\n".join(lines[:10]), allowed_mentions=discord.AllowedMentions.none())
+        return lines
 
     # ---- Marché des céréales -----------------------------------------------------------------------
     async def run_market(self, guild: discord.Guild, st) -> list[str]:
