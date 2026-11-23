@@ -72,6 +72,12 @@ def test_extract_page_shapes():
     assert extract_page({"data": [{"a": 1}], "next_cursor": "abc"}) == ([{"a": 1}], "abc")
     assert extract_page({"items": [{"a": 1}], "meta": {"next_cursor": None}}) == ([{"a": 1}], None)
     assert extract_page({"data": [], "links": {"next": "/v1/x?cursor=zz&limit=5"}}) == ([], "zz")
+    # Forme exacte de la vraie API (relevée sur Jade) : le curseur est dans meta.page
+    real = {"data": [{"a": 1}], "meta": {"request_id": "x", "generated_at": "2026-11-22T21:27:06Z",
+                                         "page": {"limit": 100, "total": 226, "next_cursor": "Y2sBqX0", "has_more": True}}}
+    assert extract_page(real) == ([{"a": 1}], "Y2sBqX0")
+    last = {"data": [{"a": 1}], "meta": {"page": {"limit": 100, "total": 226, "next_cursor": None, "has_more": False}}}
+    assert extract_page(last) == ([{"a": 1}], None)
 
 
 # ---------------------------------------------------------------- faux serveur de l'API
@@ -144,7 +150,9 @@ def paginate(rows, request, page_size_max=3):
     start = int(request.query.get("cursor", 0))
     chunk = rows[start: start + limit]
     nxt = str(start + limit) if start + limit < len(rows) else None
-    return web.json_response({"data": chunk, "next_cursor": nxt})
+    # Même enveloppe que la vraie API : le curseur est dans meta.page
+    return web.json_response({"data": chunk, "meta": {"request_id": "test", "page": {
+        "limit": limit, "total": len(rows), "next_cursor": nxt, "has_more": nxt is not None}}})
 
 
 @pytest.fixture
@@ -261,6 +269,27 @@ async def api_url(unused_tcp_port):
             return web.json_response({"status": 404}, status=404)
         return web.json_response({"data": PROFILE})
 
+    async def enterprise(request):
+        row = next((r for r in ENTERPRISES if r["name"] == request.match_info["name"]), None)
+        if row is None:
+            return web.json_response({"status": 404}, status=404)
+        return web.json_response({"data": {**row, "description": "La ferme de Sakhaline", "services": "Blé et maïs",
+                                           "disputes": 0, "contracts_in_progress_value": 5000,
+                                           "flows_14d": {"net": 12000, "salaries": -3000, "taxes": -800}}})
+
+    async def enterprise_ops(request):
+        if request.match_info["name"] != "AFR":
+            return web.json_response({"data": []})
+        return web.json_response({"data": [{"enterprise": "AFR", "kind": "farm", "trader": None, "bet": None, "farm": {
+            "history": {"wheat": {"2026-11-20": 100, "2026-11-21": 150, "2026-11-22": 90}, "corn": {"2026-11-22": 40}},
+            "top": {"wheat": 5000, "corn": 1200}, "today_collected": 130, "total_collected": 6200}}]})
+
+    async def enterprise_energy(request):
+        return web.json_response({"status": 404}, status=404)
+
+    async def enterprise_parcels(request):
+        return web.json_response({"data": []})
+
     async def status(request):
         return web.json_response({"data": {"server": "jade", "domains": STATUS}})
 
@@ -298,6 +327,10 @@ async def api_url(unused_tcp_port):
     app.router.add_get("/v1/servers/jade/hdv/items/{item}", hdv_item)
     app.router.add_get("/v1/servers/jade/lotteries", lotteries)
     app.router.add_get("/v1/servers/jade/enterprises", enterprises)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}", enterprise)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}/operations", enterprise_ops)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}/energy", enterprise_energy)
+    app.router.add_get("/v1/servers/jade/enterprises/{name}/parcels", enterprise_parcels)
     app.router.add_get("/v1/servers/jade/rankings/warzone/live", warzone_live)
     app.router.add_get("/v1/servers/jade/rankings/skills/{period}", skills)
     app.router.add_get("/v1/players/{name}", profile)
@@ -421,6 +454,7 @@ class FakeMember:
         self.display_avatar = SimpleNamespace(url="https://example.invalid/a.png")
         self.name, self.created_at, self.send = f"joueur{uid}", discord.utils.utcnow(), AsyncMock()
         self.guild_permissions = SimpleNamespace(manage_roles=False)
+        self.bot, self.global_name = False, None
 
     @property
     def top_role(self):
@@ -1128,7 +1162,7 @@ async def test_info_commands(host):
     assert "Aucun objet" in await run(infos.hdv, "licorne")
     embed = await run(infos.loteries)
     assert embed.fields[0].name == "Loterie p30" and "Gagnant_1" in embed.fields[0].value
-    embed = await run(infos.entreprises, None)
+    embed = await run(infos.entreprises_cmd, None, None)
     assert [f.name for f in embed.fields] == ["🟢 AFR"] and "132 664" in embed.description
     i = inter(guild, user)
     await infos.statut_ng.callback(infos, i)
@@ -1137,3 +1171,572 @@ async def test_info_commands(host):
     await infos.rapport.callback(infos, i)
     assert said(i).title == "📰 Rapport du jour · Amour"
     assert await cog.store.get_value("ng_rapport:555") is None  # un aperçu change pas le prochain rapport
+
+
+# ---------------------------------------------------------------- entreprises et membres
+from plugins.nationsglory import entreprises  # noqa: E402
+
+
+def test_enterprises_logic():
+    members = {m["username"].lower(): m for m in MEMBERS}
+    ours = entreprises.country_enterprises(ENTERPRISES, members, ["autre"])
+    assert [r["name"] for r in ours] == ["AFR", "Autre"]  # AFR par son propriétaire, Autre ajoutée à la main
+    tot = entreprises.totals(ours)
+    assert tot["count"] == 2 and tot["turnover"] == 132669 and tot["by_type"] == {"farm": 1, "trader": 1}
+    assert entreprises.rank(ENTERPRISES, "AFR") == (1, 2) and entreprises.rank(ENTERPRISES, "AFR", kind="farm") == (1, 1)
+    assert entreprises.enterprise_events(None, ours) == []
+    before = entreprises.snapshot(ours)
+    after = [dict(ENTERPRISES[0], owner="Bob"), {"name": "Neuve", "type": "electric", "owner": "Joueur_1"}]
+    lines = entreprises.enterprise_events(before, after)
+    assert "🏢 **Joueur_1** a fondé l'entreprise **Neuve** (⚡ Électricité)!" in lines
+    assert any("**Autre**" in x and "plus au pays" in x for x in lines)
+    assert "🔁 **AFR** change de propriétaire : Tristan_QC → **Bob**." in lines
+    assert entreprises.type_label("inconnu") == "🏢 Inconnu"
+
+
+def test_enterprise_activity_fields():
+    farm = [{"kind": "farm", "farm": {"history": {"wheat": {"2026-11-21": 10, "2026-11-22": 30}}, "top": {"wheat": 40},
+                                      "today_collected": 30, "total_collected": 40}}]
+    name, value = entreprises.operations_fields(farm)[0]
+    assert name == "🌾 Récoltes" and "**30**" in value and "Blé 40" in value
+    trader = [{"kind": "trader", "trader": {"history": {"2026-11-22": 120}, "today_bp": 120, "total_generated": 9000,
+                                            "total_investment": 50000, "investors_count": 4}}]
+    assert "+1.20 %" in entreprises.operations_fields(trader)[0][1]
+    energy = [{"kind": "electricity", "base_price": 12, "total_generated": 900,
+               "history_generated": {"2026-11-22": 40}, "history_collected": {"2026-11-22": 30}}]
+    assert entreprises.energy_fields(energy)[0][0] == "⚡ Électricité"
+    parcels = [{"parcel": "P1", "status": "to_rent", "price": 100, "price_unit": "per_day"}, {"parcel": "P2", "status": "rented"}]
+    title, value = entreprises.parcels_field(parcels)
+    assert title == "🏠 Parcelles (2)" and "P1 : à louer 100 $/jour" in value and entreprises.parcels_field([]) is None
+
+
+def test_member_logic():
+    entry = insights.profile_entry(PROFILE, "jade", None, 5.0)
+    assert entry == ["2026-11-01", 5.0, 3000, 150, "VIP", "2025-01-02", 6000]
+    assert insights.profile_entry({"private": True}, "jade", None, 1.0) == ["private", 1.0]
+    assert insights.profile_entry(None, "jade", "2026-11-20", 1.0) == ["2026-11-20", 1.0]
+    members = {"bob": {"username": "Bob", "role": "OFFICER"}, "zed": {"username": "Zed", "role": "RECRUIT"}}
+    rows = insights.member_rows(members, {"bob": entry}, {"zed"}, {"bob": [ENTERPRISES[0]]}, date(2026, 11, 22))
+    by = {r["name"]: r for r in rows}
+    assert by["Bob"]["days"] == 21 and by["Bob"]["playtime"] == 3000 and by["Zed"]["online"]
+    assert [r["name"] for r in insights.sort_members(rows, "activite")] == ["Zed", "Bob"]
+    assert [r["name"] for r in insights.sort_members(rows, "temps")] == ["Bob", "Zed"]
+    assert insights.member_line(by["Bob"]) == "😴 **Bob** · il y a 21 j · 50 h · 🏢"
+    assert insights.member_line(by["Zed"]) == "🟢 **Zed** · en jeu"
+
+
+async def test_enterprise_and_member_commands(host, monkeypatch):
+    bot, cog, _ = host
+    infos = bot.get_cog("NGInfos")
+    st, guild = await _setup_guild(bot, cog)
+    user = add_member(guild, 42)
+    monkeypatch.setattr(sys.modules["plugins.nationsglory.cog"], "paris_today", lambda: date(2026, 11, 22))
+
+    async def run(command, *args):
+        i = inter(guild, user)
+        await command.callback(infos, i, *args)
+        return i
+
+    i = await run(infos.entreprise, "AFR")
+    embed = i.followup.send.call_args.kwargs["embed"]
+    fields = {f.name: f.value for f in embed.fields}
+    assert embed.title == "🏢 AFR" and "Tristan_QC (Empereur de Amour)" in fields["👑 Propriétaire"]
+    assert fields["💸 14 derniers jours"].startswith("Net +12 000 $") and "1er sur" not in fields["🏆 Rang (chiffre d'affaires)"]
+    assert "🌾 Récoltes" in fields and "📈 CA sur 30 jours" in fields
+    i = await run(infos.entreprise, "afr")  # sans tenir compte de la casse
+    assert i.followup.send.call_args.kwargs["embed"].title == "🏢 AFR"
+    assert "trouve pas" in said(await run(infos.entreprise, "Licorne Inc"))
+
+    embed = said(await run(infos.entreprises_cmd, None, "farm"))
+    assert embed.title.startswith("🏆 🌾 Ferme") and "⭐ **AFR**" in embed.description
+    choices = await infos._enterprise_choices(inter(guild, user), "a")
+    assert choices[0].name == "⭐ AFR" and choices[0].value == "AFR"
+
+    for _ in range(8):
+        cog._last_activity.clear()
+        await cog.check_activity(st)
+    logins = await cog._logins(st)
+    assert logins["bob"][:3] == ["2026-11-01", logins["bob"][1], 3000]  # lu dans sa fiche publique
+
+    embed = said(await run(infos.membre, "bob"))
+    fields = {f.name: f.value for f in embed.fields}
+    assert embed.title == "⭐ Bob" and "**Conseiller** de **Amour**" in embed.description
+    assert fields["⏱️ Temps de jeu sur Jade"] == "50 h" and fields["💎 Grade boutique"] == "VIP"
+    assert "Mineur 2e" in fields["🛠️ Tops compétences (cette semaine)"]
+    assert "pas membre" in said(await run(infos.membre, "Inconnu_9"))
+    assert [c.value for c in await infos._member_choices(inter(guild, user), "jou")][:2] == ["Joueur_0", "Joueur_1"]
+
+    embed = said(await run(infos.membres, "grade", 1))
+    assert embed.title == "👥 Amour · 7 membres · 🟢 2 en jeu" and "__👑 Empereur__" in embed.description
+    assert "🟢 **Tristan_QC** · en jeu" in embed.description and "🏢" in embed.description
+    embed = said(await run(infos.classement_membres, "temps"))
+    assert embed.description.startswith("🥇 **Bob** · 50 h")
+    embed = said(await run(infos.classement_membres, "entreprises"))
+    assert embed.description.startswith("🥇 **Tristan_QC** · 132 664 $")
+
+
+async def test_enterprise_announcements(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_annonces_id": 70})
+    chan = SimpleNamespace(id=70, send=AsyncMock())
+    guild.channels[70] = chan
+    assert await cog.run_enterprises(guild, st) == []  # 1er tour
+    ENTERPRISES.append({"name": "SakhaElec", "type": "electric", "owner": "Bob", "is_open": True, "members_count": 5, "turnover": 10})
+    for c in cog.clients.values():
+        c._cached.pop("enterprises", None)
+    try:
+        lines = await cog.run_enterprises(guild, st)
+    finally:
+        ENTERPRISES.pop()
+    assert lines == ["🏢 **Bob** a fondé l'entreprise **SakhaElec** (⚡ Électricité)!"] and chan.send.await_count == 1
+
+
+# ---------------------------------------------------------------- liaison automatique
+from plugins.nationsglory import liaison, tetes  # noqa: E402
+
+
+def test_match_member():
+    members = {m["username"].lower(): m for m in MEMBERS}
+    assert liaison.match_member(["TRISTAN_QC"], members) == "Tristan_QC"
+    assert liaison.match_member(["[SKH] Joueur_2 | Dealer"], members) == "Joueur_2"
+    assert liaison.match_member(["Bob et Joueur_1"], members) is None  # deux pseudos : ambigu, on demande
+    assert liaison.match_member(["Bob"], members, taken={"bob"}) is None  # déjà lié à quelqu'un d'autre
+    assert liaison.match_member(["Steve", "steve_123"], members) is None
+    member = SimpleNamespace(nick="[SKH] Bob", global_name="Bobby", name="bob.discord")
+    assert liaison.candidate_names(member) == ["[SKH] Bob", "Bobby", "bob.discord"]
+
+
+async def test_auto_link_and_ask(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_validation_id": 77, "salon_liaison_id": 78})
+    validation = SimpleNamespace(id=77, send=AsyncMock())
+    lobby = SimpleNamespace(id=78, send=AsyncMock())
+    guild.channels.update({77: validation, 78: lobby})
+
+    # Nom qui correspond à un membre (grade bas) : lié tout seul, avec « Annuler » pour les officiers
+    dealer = add_member(guild, 60)
+    dealer.nick = "[SKH] Joueur_2"
+    await cog.on_member_join(dealer)
+    assert (await cog.store.get_link(555, 60))["ng_name"] == "Joueur_2" and 3 in {r.id for r in dealer.roles}
+    view = validation.send.call_args.kwargs["view"]
+    assert view.children[0].custom_id == "ngl:undo:60:Joueur_2" and "lié tout seul" in dealer.send.call_args.args[0]
+
+    # Le nom du chef : pas de liaison directe, une demande de validation
+    faux_chef = add_member(guild, 61)
+    faux_chef.nick = "Tristan_QC"
+    await cog.on_member_join(faux_chef)
+    assert await cog.store.get_link(555, 61) is None
+    assert [c.custom_id for c in validation.send.call_args.kwargs["view"].children] == ["ngl:ok:61:Tristan_QC", "ngl:no:61:Tristan_QC"]
+
+    # Introuvable : le bot lui demande son pseudo en MP (une seule fois)
+    inconnu = add_member(guild, 62)
+    await cog.on_member_join(inconnu)
+    assert inconnu.send.call_args.kwargs["view"].children[0].custom_id == "ngl:ask:555"
+    await cog.on_member_join(inconnu)
+    assert inconnu.send.await_count == 1
+    # MP fermés : dans le salon de liaison
+    ferme = add_member(guild, 63)
+    ferme.send = AsyncMock(side_effect=discord.Forbidden(SimpleNamespace(status=403, reason="x"), "MP fermés"))
+    await cog.on_member_join(ferme)
+    assert lobby.send.call_args.args[0] == "<@63>"
+
+    # Le formulaire du bouton (peut venir d'un MP : la guilde vient du bouton)
+    bot._connection._guilds = {555: guild}
+    i = inter(guild, inconnu)
+    i.guild = None
+    i.client = bot
+    modal = liaison.PseudoModal(555)
+    modal.pseudo._value = "Joueur_3"
+    await modal.on_submit(i)
+    assert "Demande envoyée" in said(i)
+
+    # Un officier annule une liaison automatique
+    officer = add_member(guild, 50)
+    officer.guild_permissions = SimpleNamespace(manage_roles=True)
+    i = inter(guild, officer)
+    i.message = SimpleNamespace(embeds=[discord.Embed(title="x")])
+    await cog.undo_auto_link(i, 60, "Joueur_2")
+    assert await cog.store.get_link(555, 60) is None and 3 not in {r.id for r in dealer.roles}
+
+    # Changer de surnom réessaie la liaison
+    later = add_member(guild, 64)
+    before = SimpleNamespace(nick=None)
+    later.nick = "Joueur_4"
+    await cog.on_member_update(before, later)
+    assert (await cog.store.get_link(555, 64))["ng_name"] == "Joueur_4"
+
+
+# ---------------------------------------------------------------- employés et rôles d'entreprise
+async def test_employees_and_enterprise_roles(host):
+    bot, cog, _ = host
+    infos = bot.get_cog("NGInfos")
+    st, guild = await _setup_guild(bot, cog, {"roles_entreprises": True, "role_patron_id": 99})
+    created = []
+
+    async def create_role(name, **kw):
+        role = FakeRole(1000 + len(created), 1, name)
+        created.append(role)
+        roles_by_id[role.id] = role
+        return role
+
+    roles_by_id = {}
+    base_get = guild.get_role
+    guild.get_role = lambda rid: roles_by_id.get(rid) or base_get(rid)
+    guild.create_role = create_role
+    guild.roles = []
+    patron = add_member(guild, 42)
+    employe = add_member(guild, 43)
+    curieux = add_member(guild, 44)
+    await cog.store.add_link(555, 42, "Tristan_QC")  # propriétaire d'AFR
+
+    i = inter(guild, curieux)
+    await infos.employe_ajouter.callback(infos, i, employe, "AFR")
+    assert "Seul le patron" in said(i)
+    i = inter(guild, patron)
+    await infos.employe_ajouter.callback(infos, i, employe, "afr")
+    assert "travaille maintenant pour **AFR**" in said(i)
+    assert [r.name for r in created] == ["🏢 AFR"]
+    assert 1000 in {r.id for r in employe.roles} and 1000 in {r.id for r in patron.roles} and 99 in {r.id for r in patron.roles}
+    i = inter(guild, patron)
+    await infos.employe_liste.callback(infos, i, None)
+    assert "<@43>" in said(i).fields[0].value
+    i = inter(guild, patron)
+    await infos.employe_retirer.callback(infos, i, employe, "AFR")
+    assert 1000 not in {r.id for r in employe.roles}
+    assert await cog.sync_enterprise_roles(guild, st) == 0  # tout est à jour
+    i = inter(guild, patron)
+    await infos.entreprise.callback(infos, i, "AFR")
+    assert i.followup.send.called
+
+
+# ---------------------------------------------------------------- salon « en jeu » avec les têtes
+def test_render_heads():
+    from PIL import Image
+    import io as _io
+    face = _io.BytesIO()
+    Image.new("RGBA", (8, 8), (200, 150, 100, 255)).save(face, "PNG")
+    people = [{"name": f"Joueur_{i}", "role": "MEMBER", "label": "Dealer", "face": face.getvalue() if i % 2 else None}
+              for i in range(50)]
+    png = tetes.render(people)
+    img = Image.open(_io.BytesIO(png))
+    assert img.size == (12 * 2 + 6 * tetes.CELL_W, 12 * 2 + 9 * tetes.CELL_H)  # 48 têtes + « +2 »
+
+
+async def test_online_board(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_en_ligne_id": 85})
+    sent = []
+
+    async def send(**kw):
+        msg = SimpleNamespace(id=900 + len(sent), **kw)
+        sent.append(msg)
+        return msg
+
+    guild.channels[85] = SimpleNamespace(id=85, send=send, get_partial_message=None)
+    cog.face = AsyncMock(return_value=None)
+    assert await cog.run_online_board(guild, st)
+    embed = sent[0].embed
+    assert embed.title == "🟢 Amour : 2 en jeu" and embed.image.url == "attachment://enligne.png"
+    assert "**Empereur** : Tristan\\_QC" in embed.description and sent[0].files[0].filename == "enligne.png"
+    assert not await cog.run_online_board(guild, st)  # rien a changé : pas de nouvelle image
+
+
+# ---------------------------------------------------------------- salons des entreprises
+async def test_enterprise_channels(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salons_entreprises": True})
+    guild.me.guild_permissions = SimpleNamespace(manage_roles=True, manage_nicknames=True, manage_channels=True)
+    guild.default_role = FakeRole(555, 0, "@everyone")
+    messages: dict[int, list] = {}
+
+    class Channel(SimpleNamespace):
+        async def send(self, embed=None):
+            msg = SimpleNamespace(id=self.id * 100 + len(messages.setdefault(self.id, [])), embed=embed)
+            messages[self.id].append(msg)
+            return msg
+
+        def get_partial_message(self, mid):
+            channel = self
+
+            class Partial:
+                async def edit(self, embed=None):
+                    if not any(m.id == mid for m in messages.get(channel.id, [])):
+                        raise discord.NotFound(SimpleNamespace(status=404, reason="x"), "x")
+                    messages[channel.id].append(SimpleNamespace(id=mid, embed=embed, edited=True))
+            return Partial()
+
+    class Category(SimpleNamespace):
+        async def create_text_channel(self, name, overwrites=None, reason=None, topic=None):
+            ch = Channel(id=7000 + len(guild.channels), name=name, topic=topic, overwrites=overwrites)
+            guild.channels[ch.id] = ch
+            return ch
+
+    async def create_category(name, overwrites=None, reason=None):
+        cat = Category(id=6999, name=name, overwrites=overwrites)
+        guild.channels[cat.id] = cat
+        return cat
+
+    guild.create_category = create_category
+    assert await cog.run_enterprise_channels(guild, st) == 2  # résumé + AFR
+    names = sorted(c.name for c in guild.channels.values())
+    assert names == ["🌾・AFR", "🏢 Entreprises", "📊・entreprises-du-pays"]
+    afr = next(c for c in guild.channels.values() if c.name == "🌾・AFR")
+    embed = messages[afr.id][0].embed
+    assert embed.title == "🏢 AFR" and embed.thumbnail.url.endswith("/Tristan_QC.png")
+    assert "🌾 Récoltes" in {f.name for f in embed.fields}
+    # 2e tour : mêmes salons, messages modifiés
+    assert await cog.run_enterprise_channels(guild, st) == 2
+    assert len(guild.channels) == 3 and messages[afr.id][-1].edited
+    # L'entreprise quitte le pays : on le dit dans son salon, sans le supprimer
+    saved = list(ENTERPRISES)
+    ENTERPRISES[:] = [r for r in ENTERPRISES if r["name"] != "AFR"]
+    for c in cog.clients.values():
+        c._cached.clear()
+    try:
+        await cog.run_enterprise_channels(guild, st)
+    finally:
+        ENTERPRISES[:] = saved
+    assert "plus au pays" in messages[afr.id][-1].embed.description and afr.id in guild.channels
+
+
+# ---------------------------------------------------------------- options ajoutées en 1.7.0
+def test_text_options_logic():
+    from plugins.nationsglory.logic import fill, format_nick
+    assert format_nick("{pseudo}", "Bob", "Conseiller", "Amour") == "Bob"
+    assert format_nick("[{grade}] {pseudo}", "Bob", "Conseiller", "Amour") == "[Conseiller] Bob"
+    assert format_nick("[{grade}] {pseudo}", "Bob", None, "Amour") == "Bob"  # hors du pays : juste le pseudo
+    assert format_nick("{pseudo} | {grade} de {pays} et encore plus long", "Bob", "Officier", "Amour") == "Bob"  # > 32
+    assert format_nick("{grade}", "Bob", "Officier", "Amour") == "Bob"  # sans pseudo : refusé
+    assert fill("{joueur} {inconnu} {", joueur="x") == "{joueur} {inconnu} {"  # accolade mal fermée : tel quel
+    assert fill("{joueur} entre dans {pays} {inconnu}", joueur="Bob", pays="Amour") == "Bob entre dans Amour {inconnu}"
+
+
+def test_veille_options_logic():
+    assert veille.cereal_wanted("cereal_ble", ["Blé"]) and veille.cereal_wanted("cereal_mais", ["  MAIS "])
+    assert not veille.cereal_wanted("cereal_avoine", ["blé", "maïs"])
+    assert veille.hdv_pick("bloc de diamant", HDV)["item"] == "57:0" and veille.hdv_pick("diam", HDV)["item"] == "264:0"
+    assert veille.hdv_pick("x", []) is None
+    lines, ref = veille.hdv_moves(None, HDV, 10)
+    assert lines == [] and ref == {"264:0": 13000, "57:0": 116000}
+    lines, ref2 = veille.hdv_moves(ref, [{**HDV[0], "last_day_median_cents": 16000}, HDV[1]], 10)
+    assert lines == ["📈 **Diamant** : 130 $ → 160 $ (+23 %)"] and ref2["264:0"] == 16000
+    assert veille.hdv_moves(ref2, [{**HDV[0], "last_day_median_cents": 16500}], 10)[0] == []  # +3 % : rien
+
+    events, states = veille.lottery_events(None, LOTTERIES)
+    assert events == [] and states == {"p30": "past"}
+    new = {"lottery_id": "p31", "state": "running", "cash_prize": 100000, "ticket_price": 1000}
+    events, states = veille.lottery_events(states, LOTTERIES + [new])
+    assert [k for k, _ in events] == ["nouvelle"]
+    events, states = veille.lottery_events(states, LOTTERIES + [{**new, "state": "past", "winners": ["Bob"]}])
+    assert [k for k, _ in events] == ["finie"] and states["p31"] == "past"
+    assert veille.lottery_events(states, LOTTERIES)[0] == []  # l'API l'a oubliée : rien
+
+
+async def test_nick_dm_and_announce_options(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"format_surnom": "[{grade}] {pseudo}", "roles_sans_surnom": [10],
+                                              "mp_liaison": False, "salon_annonces_id": 70, "role_annonces_id": 20,
+                                              "message_arrivee": "🎊 Bienvenue {joueur} ({grade}) chez {pays}!",
+                                              "annoncer_retrogradations": True})
+    chef = add_member(guild, 42)
+    staff = add_member(guild, 43, [FakeRole(10, 10)])
+    await cog.store.add_link(555, 42, "Tristan_QC")
+    await cog.store.add_link(555, 43, "Bob")
+    await cog.sync_all(guild, st)
+    assert chef.edit.call_args.kwargs["nick"] == "[Empereur] Tristan_QC"  # nom de grade choisi par le pays
+    assert not staff.edit.called  # rôle « jamais renommer »
+    # MP de liaison coupés : le refus d'un officier est pas envoyé en MP
+    officier = add_member(guild, 1)
+    officier.guild_permissions = SimpleNamespace(manage_roles=True)
+    i = inter(guild, officier)
+    await cog.handle_decision(i, "no", 43, "Bob")
+    assert i.response.edits and not staff.send.called
+
+    announce = SimpleNamespace(id=70, send=AsyncMock())
+    guild.channels[70] = announce
+    before = {"bob": {"username": "Bob", "role": "OFFICER"}}
+    await cog.announce_country_changes(guild, st, before)
+    after = {"bob": {"username": "Bob", "role": "MEMBER"}, "new": {"username": "Nouveau", "role": "RECRUIT"}}
+    lines = await cog.announce_country_changes(guild, st, after)
+    assert "🎊 Bienvenue **Nouveau** (Recrue) chez Amour!" in lines and "🔻 **Bob** (<@43>) redescend **Membre**." in lines
+    sent = announce.send.call_args
+    assert sent.args[0].startswith("<@&20>\n") and sent.kwargs["allowed_mentions"].roles[0].id == 20
+
+
+async def test_alert_options(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_guerres_id": 80, "salon_assauts_id": 83, "role_alerte_id": 81,
+                                              "mention_alertes": "toutes", "alerte_power": False, "alerte_ennemis": False,
+                                              "alerte_diplomatie": False, "warzone_top": 3, "salon_warzone_id": 82})
+    chans = {i: SimpleNamespace(id=i, send=AsyncMock()) for i in (80, 82, 83)}
+    guild.channels.update(chans)
+    saved = [dict(w) for w in WARS]
+    WARS[0].update(status="in_progress", assaults=[{"on": "2026-11-21", "winner": "attacker"}])
+    try:
+        assert await cog.run_alerts(guild, st) == []  # 1er tour : on prend note
+        WARS[0]["assaults"].append({"on": "2026-11-22", "winner": "defender"})
+        for c in cog.clients.values():
+            c._cached.clear()
+        lines = await cog.run_alerts(guild, st)
+    finally:
+        WARS[:] = saved
+    assert len(lines) == 1 and lines[0].startswith("✅")  # on a repoussé l'assaut
+    assert not chans[80].send.called  # les assauts vont dans leur salon
+    assert chans[83].send.call_args.args[0].startswith("<@&81>")  # « à chaque alerte »
+    st.alert_mention = "jamais"
+    await cog._post_alert(chans[80], st, ["⚔️ grave"], True)
+    assert chans[80].send.call_args.args[0] == "⚔️ grave"
+    assert await cog.run_warzone(guild, st)
+    embed = chans[82].send.call_args_list[0].kwargs["embed"]
+    assert embed.description.count("\n") == 2 and embed.fields[0].value.startswith("`8.`")  # top 3 + notre rang
+
+
+async def test_online_board_options(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_en_ligne_id": 85, "en_jeu_tetes": False, "en_jeu_allies": True,
+                                              "en_jeu_minutes": 15})
+    sent = []
+
+    async def send(**kw):
+        sent.append(SimpleNamespace(id=900 + len(sent), **kw))
+        return sent[-1]
+
+    guild.channels[85] = SimpleNamespace(id=85, send=send, get_partial_message=None)
+    add_member(guild, 77)
+    await cog.store.add_link(555, 77, "Quelquun")  # en jeu, pas dans le pays
+    cog.face = AsyncMock(return_value=None)
+    assert await cog.run_online_board(guild, st)
+    embed = sent[0].embed
+    assert embed.title == "🟢 Amour : 2 en jeu (+1 hors du pays)" and not sent[0].files and not embed.image
+    assert "**Hors du pays** : Quelquun" in embed.description and "15 minutes" in embed.footer.text
+    assert not cog.face.called and st.online_interval == 15
+
+
+async def test_veille_options_in_bot(host, monkeypatch):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"salon_hdv_id": 93, "objets_hdv": ["Diamant", "Licorne"], "seuil_hdv": 10,
+                                              "salon_loteries_id": 94, "salon_marche_id": 92, "cereales_suivies": ["avoine"],
+                                              "frequence_rapport": "semaine", "salon_rapport_id": 90, "heure_rapport": 0})
+    chans = {i: SimpleNamespace(id=i, send=AsyncMock()) for i in (90, 92, 93, 94)}
+    guild.channels.update(chans)
+
+    def fresh():
+        for c in cog.clients.values():
+            c._cached.clear()
+
+    assert await cog.run_hdv(guild, st) == []  # 1er tour (la licorne existe pas : avertissement, pas d'erreur)
+    HDV[0]["last_day_median_cents"] = 16000
+    fresh()
+    try:
+        assert await cog.run_hdv(guild, st) == ["📈 **Diamant** : 130 $ → 160 $ (+23 %)"]
+    finally:
+        HDV[0]["last_day_median_cents"] = 13000
+    assert chans[93].send.call_args.kwargs["embed"].title == "🏪 Hôtel des ventes · Jade"
+
+    assert await cog.run_lotteries(guild, st) == 0
+    LOTTERIES.append({"lottery_id": "p31", "state": "running", "cash_prize": 100000, "ticket_price": 1000,
+                      "ends_at": "2026-11-30T20:00:00Z", "tickets_sold": 3})
+    fresh()
+    try:
+        assert await cog.run_lotteries(guild, st) == 1
+        assert chans[94].send.call_args.kwargs["embed"].title == "🎟️ Nouvelle loterie sur Jade!"
+        LOTTERIES[-1].update(state="past", winners=["Bob"])
+        fresh()
+        assert await cog.run_lotteries(guild, st) == 1
+    finally:
+        LOTTERIES.pop()
+    embed = chans[94].send.call_args.kwargs["embed"]
+    assert embed.title == "🏁 Loterie terminée" and any(f.value == "Bob" for f in embed.fields)
+
+    assert await cog.run_market(guild, st) == []
+    MARKET[1]["price"], MARKET[0]["price"] = 800, 4000
+    fresh()
+    try:
+        lines = await cog.run_market(guild, st)
+    finally:
+        MARKET[1]["price"], MARKET[0]["price"] = 400, 2000
+    assert lines == ["📈 **Avoine** : 2 000 $ → 4 000 $ (+100 %)"]  # le blé est pas suivi
+
+    from plugins.nationsglory import veille_run
+    monday = veille_run.datetime(2026, 11, 23, 12, tzinfo=veille_run.timezone.utc)
+    sunday = veille_run.datetime(2026, 11, 22, 12, tzinfo=veille_run.timezone.utc)
+    monkeypatch.setattr(veille_run, "local_now", lambda tz: monday)
+    assert cog.report_due(st) is None  # rapport de la semaine : le dimanche
+    monkeypatch.setattr(veille_run, "local_now", lambda tz: sunday)
+    assert cog.report_due(st) == "2026-11-22" and await cog.run_report(guild, st)
+    assert chans[90].send.call_args.kwargs["embed"].title == "📰 Rapport de la semaine · Amour"
+
+
+async def test_enterprise_options(host):
+    bot, cog, _ = host
+    st, guild = await _setup_guild(bot, cog, {"role_employe_id": 20, "salons_prives": True, "employes_ecrivent": False,
+                                              "stats_courbe": False, "stats_activite": False, "entreprises_minutes": 60})
+    guild.default_role = FakeRole(555, 0, "@everyone")
+    employe = add_member(guild, 43)
+    ancien = add_member(guild, 44, [FakeRole(20, 20)])
+    await cog.store.add_employee(555, "AFR", 43, 42)
+    assert await cog.sync_enterprise_roles(guild, st) == 2
+    assert 20 in {r.id for r in employe.roles} and 20 not in {r.id for r in ancien.roles}
+
+    role = FakeRole(1000, 1, "🏢 AFR")
+    wanted = cog._enterprise_overwrites(guild, st, role)
+    assert wanted[guild.default_role].view_channel is False and wanted[role].view_channel is True
+    assert wanted[role].send_messages is False and cog._enterprise_overwrites(guild, st, None) == {}
+    channel = SimpleNamespace(name="🌾・AFR", overwrites_for=lambda t: discord.PermissionOverwrite(),
+                              set_permissions=AsyncMock())
+    await cog._fit_permissions(channel, wanted)
+    assert channel.set_permissions.await_count == 3  # @everyone, le bot, le rôle de l'entreprise
+
+    full, _ = await cog.enterprise_embed(555, st, "AFR")
+    assert "🌾 Récoltes" in {f.name for f in full.fields}
+    embed, _ = await cog.enterprise_embed(555, st, "AFR", chart=False, activity=False)
+    names = {f.name for f in embed.fields}
+    assert "📈 CA sur 30 jours" not in names and "🌾 Récoltes" not in names
+    assert st.enterprise_interval == 60
+
+
+async def test_command_options(host):
+    from plugins.nationsglory.cog import command_refusal
+    from plugins.nationsglory.common import CommandRefused
+    bot, cog, _ = host
+    infos = bot.get_cog("NGInfos")
+    st, guild = await _setup_guild(bot, cog, {"reponses_privees": True, "salons_commandes": [300], "role_commandes_id": 10})
+    citoyen = add_member(guild, 42, [FakeRole(10, 10)])
+    citoyen.guild_permissions = SimpleNamespace(manage_guild=False, administrator=False, manage_roles=False)
+    touriste = add_member(guild, 43)
+    touriste.guild_permissions = citoyen.guild_permissions
+
+    def ask(user, name, channel=300, parent=None):
+        i = inter(guild, user)
+        i.command = SimpleNamespace(qualified_name=name)
+        i.channel = SimpleNamespace(id=channel, parent_id=parent)
+        return i
+
+    assert command_refusal(st, ask(citoyen, "pays")) is None
+    assert "<@&10>" in command_refusal(st, ask(touriste, "membre"))
+    assert "<#300>" in command_refusal(st, ask(citoyen, "entreprise", channel=301))
+    assert command_refusal(st, ask(citoyen, "entreprise", channel=302, parent=300)) is None  # un fil du salon permis
+    assert command_refusal(st, ask(touriste, "lier", channel=301)) is None  # la liaison marche partout
+    assert command_refusal(st, ask(touriste, "synchro tout", channel=301)) is None
+    staff = add_member(guild, 44)
+    staff.guild_permissions = SimpleNamespace(manage_guild=True, administrator=False)
+    assert command_refusal(st, ask(staff, "pays", channel=301)) is None
+    with pytest.raises(CommandRefused) as err:
+        await infos.interaction_check(ask(touriste, "loteries"))
+    assert err.value.user_message.startswith("⛔")
+    assert await cog.interaction_check(ask(citoyen, "guerres"))
+
+    i = inter(guild, citoyen)
+    await infos.loteries.callback(infos, i)
+    assert i.followup.send.call_args.kwargs["ephemeral"] is True  # réponses privées
+
+
+async def test_new_options_validation(host):
+    bot, cog, _ = host
+    base = {"active": True, "serveur": "jade", "pays": "Amour", "grades": GRADES}
+    assert cog.validate_guild_config({"ng": {**base, "format_surnom": "[{grade}]"}}) == [
+        "NationsGlory : le format du surnom doit contenir {pseudo}"]
+    errors = cog.validate_guild_config({"ng": {**base, "role_patron_id": 30, "role_employe_id": 30}})
+    assert errors == ["NationsGlory : les rôles « patron » et « employé » doivent être différents"]
+    errors = cog.validate_guild_config({"ng": {**base, "role_employe_id": GRADES["LEADER"]}})
+    assert "« employé » est déjà utilisé" in errors[0]

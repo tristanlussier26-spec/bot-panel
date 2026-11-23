@@ -82,3 +82,28 @@ def plan_sync(member_role_ids: set[int], in_country: bool, rank: str | None, s: 
 def plan_unlink(member_role_ids: set[int], s: SyncSettings) -> SyncPlan:
     """Compte délié : on retire tous les rôles gérés par la synchro."""
     return SyncPlan(remove_roles=s.managed_roles & member_role_ids)
+
+
+# ---- Options de texte (format du surnom, message d'arrivée) ----------------------------------
+class _Keep(dict):
+    """Laisse les variables inconnues telles quelles ({truc} reste {truc}) au lieu de planter."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def fill(template: str, **values: str) -> str:
+    try:
+        return str(template).format_map(_Keep(values))
+    except (ValueError, IndexError, AttributeError):  # accolade mal fermée, {0}, {a.b} : on garde le texte tel quel
+        return str(template)
+
+
+def format_nick(template: str, pseudo: str, grade: str | None, country: str) -> str:
+    """Le surnom Discord d'un membre lié. Juste le pseudo s'il est hors du pays ou si ça dépasse 32 caractères."""
+    if grade is None or not template or template.strip() == "{pseudo}":
+        return pseudo
+    nick = fill(template, pseudo=pseudo, grade=grade, pays=country).strip()
+    if pseudo not in nick or not 1 <= len(nick) <= 32:
+        return pseudo
+    return nick

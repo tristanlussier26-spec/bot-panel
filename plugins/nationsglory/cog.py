@@ -30,10 +30,11 @@ from discord.ext import commands, tasks
 
 from . import alerts, insights
 from .api import NationsGlory, RateLimiter, normalize_target
-from .common import BLUE, GREEN, GREY, RED, NationsGloryError, ServiceError, make_embed, reply, truncate
-from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, parse_settings, plan_sync, plan_unlink
+from .common import BLUE, GREEN, GREY, RED, CommandRefused, NationsGloryError, ServiceError, make_embed, reply, truncate
+from .liaison import HIGH_RANKS, AskButton, UndoButton, ask_view, candidate_names, match_member
+from .logic import RANK_LABELS, RANKS, ConfigError, SyncPlan, fill, format_nick, parse_settings, plan_sync, plan_unlink
 from .store import Store
-from .veille_run import FORUM_EVERY, MARKET_EVERY, VeilleMixin
+from .veille_run import ENTERPRISES_EVERY, FORUM_EVERY, HDV_EVERY, LOTTERIES_EVERY, MARKET_EVERY, VeilleMixin
 
 log = logging.getLogger("plugin.nationsglory")
 
@@ -47,6 +48,7 @@ def rank_label(rank: str | None) -> str:
 
 RANK_EMOJI = {"LEADER": "👑", "OFFICER": "⭐", "MEMBER": "🛡️", "RECRUIT": "🌱"}
 RANK_COLOR = {"LEADER": 0xF1C40F, "OFFICER": 0x3498DB, "MEMBER": 0x2ECC71, "RECRUIT": 0x95A5A6}
+DEFAULT_ARRIVAL = "👋 {joueur} rejoint **{pays}** comme {grade}!"
 KEY_PAUSE = 10 * 60  # clé refusée (IP changée?) : on attend avant de réessayer
 
 
@@ -66,6 +68,30 @@ WARZONE_EVERY = 15 * 60
 ORANGE = 0xE67E22
 ACTIVITY_REFRESH = 12 * 3600  # dernière connexion d'un membre relue aux 12 h (publiée au jour près)
 ACTIVITY_EVERY = 30  # une vérification aux 30 s par pays : ~110 membres en une heure, ~2 requêtes/min
+
+
+OPEN_COMMANDS = {"lier", "delier", "compte", "liaison-panneau"}  # la liaison doit marcher partout, pour tout le monde
+
+
+def command_refusal(st: "GuildNG | None", interaction: discord.Interaction) -> str | None:
+    """Pourquoi la commande est refusée par les options « NationsGlory : commandes » (None = permise)."""
+    command = interaction.command
+    name = command.qualified_name if command else ""
+    if st is None or not name or name.split(" ")[0] in OPEN_COMMANDS | {"synchro"}:
+        return None
+    user = interaction.user
+    perms = getattr(user, "guild_permissions", None)
+    if perms is not None and (perms.manage_guild or perms.administrator):
+        return None  # le staff peut tout faire partout
+    if st.command_role_id and not any(r.id == st.command_role_id for r in getattr(user, "roles", [])):
+        return f"⛔ Il faut le rôle <@&{st.command_role_id}> pour utiliser les commandes NationsGlory."
+    if st.command_channels:
+        channel = interaction.channel
+        ids = {getattr(channel, "id", 0), getattr(channel, "parent_id", 0) or 0}  # un fil compte comme son salon
+        if not ids & st.command_channels:
+            where = ", ".join(f"<#{c}>" for c in sorted(st.command_channels)[:5])
+            return f"🔇 Les commandes NationsGlory se font dans {where}."
+    return None
 
 
 def paris_today() -> date:
@@ -149,8 +175,13 @@ class GuildNG:
         self.interval = max(1, int(cfg.get("intervalle_minutes", 5)))
         self.validation_channel_id = chan("salon_validation_id")
         self.validator_role_id = chan("role_validateur_id")
+        self.auto_link = bool(cfg.get("liaison_auto", True))
+        self.ask_pseudo = bool(cfg.get("demander_pseudo", True))
+        self.link_channel_id = chan("salon_liaison_id")
         self.stats_channel_id = chan("salon_stats_id")
         self.status_interval = max(1, int(cfg.get("statut_minutes", 5)))
+        self.online_channel_id = chan("salon_en_ligne_id")
+        self.last_online_board = -1e9
         self.announce_channel_id = chan("salon_annonces_id")
         self.announce = {
             k: bool(cfg.get(f"annoncer_{k}", d)) for k, d in (("arrivees", True), ("promotions", True), ("departs", False))
@@ -178,6 +209,49 @@ class GuildNG:
         self.ingame_role_id = chan("role_en_jeu_id")
         self.inactive_role_id = chan("role_inactif_id")
         self.inactive_days = max(1, int(cfg.get("jours_inactif", 14) or 14))
+        self.announce_enterprises = bool(cfg.get("annoncer_entreprises", True))
+        self.enterprise_roles = bool(cfg.get("roles_entreprises", False))
+        self.patron_role_id = chan("role_patron_id")
+        self.enterprise_channels = bool(cfg.get("salons_entreprises", False))
+        self.enterprise_category_id = chan("categorie_entreprises_id")
+        self.last_enterprise_channels = -1e9
+        self.extra_enterprises = [str(x).strip() for x in cfg.get("entreprises_pays") or [] if str(x).strip()][:50]
+        self.last_enterprises = -1e9
+        # Options ajoutées en 1.7.0
+        def ids(key: str) -> set[int]:
+            return {int(x) for x in cfg.get(key) or [] if str(x).isdigit() and int(x)}
+
+        self.nick_format = str(cfg.get("format_surnom") or "{pseudo}").strip() or "{pseudo}"
+        self.no_rename_roles = ids("roles_sans_surnom")
+        self.dm_links = bool(cfg.get("mp_liaison", True))
+        self.online_interval = min(60, max(5, int(cfg.get("en_jeu_minutes", 5) or 5)))
+        self.online_faces = bool(cfg.get("en_jeu_tetes", True))
+        self.online_allies = bool(cfg.get("en_jeu_allies", False))
+        self.announce_role_id = chan("role_annonces_id")
+        self.arrival_message = str(cfg.get("message_arrivee") or "").strip() or DEFAULT_ARRIVAL
+        self.announce["retrogradations"] = bool(cfg.get("annoncer_retrogradations", False))
+        mention = str(cfg.get("mention_alertes") or "graves")
+        self.alert_mention = mention if mention in ("graves", "toutes", "jamais") else "graves"
+        self.assault_channel_id = chan("salon_assauts_id")
+        self.warzone_top = min(25, max(3, int(cfg.get("warzone_top", 10) or 10)))
+        self.weekly_report = cfg.get("frequence_rapport") == "semaine"
+        self.cereals = [str(x).strip() for x in cfg.get("cereales_suivies") or [] if str(x).strip()][:30]
+        self.hdv_channel_id = chan("salon_hdv_id")
+        self.hdv_items = [str(x).strip() for x in cfg.get("objets_hdv") or [] if str(x).strip()][:10]
+        self.hdv_pct = max(1, int(cfg.get("seuil_hdv", 15) or 15))
+        self.last_hdv = -1e9
+        self.lottery_channel_id = chan("salon_loteries_id")
+        self.last_lotteries = -1e9
+        self.dm_inactive = bool(cfg.get("mp_inactifs", False))
+        self.enterprise_interval = min(240, max(10, int(cfg.get("entreprises_minutes", 30) or 30)))
+        self.private_enterprises = bool(cfg.get("salons_prives", False))
+        self.staff_can_write = bool(cfg.get("employes_ecrivent", True))
+        self.enterprise_chart = bool(cfg.get("stats_courbe", True))
+        self.enterprise_activity = bool(cfg.get("stats_activite", True))
+        self.employee_role_id = chan("role_employe_id")
+        self.private_replies = bool(cfg.get("reponses_privees", False))
+        self.command_channels = ids("salons_commandes")
+        self.command_role_id = chan("role_commandes_id")
         self.last_report_day: str | None = None
         self.last_forum = -1e9
         self.last_market = -1e9
@@ -230,15 +304,21 @@ class NGSync(VeilleMixin, commands.Cog):
         await self.store.connect()
         if not self.api_key():
             log.warning("NG_API_KEY est vide : mets la clé de l'API NationsGlory dans l'onglet Plugins de Bot Panel")
-        self.bot.add_dynamic_items(LinkButton)
+        self.bot.add_dynamic_items(LinkButton, AskButton, UndoButton)
         self.tick.start()
 
     async def cog_unload(self) -> None:
         self.tick.cancel()
-        self.bot.remove_dynamic_items(LinkButton)
+        self.bot.remove_dynamic_items(LinkButton, AskButton, UndoButton)
         for client in self.clients.values():
             await client.close()
         await self.store.close()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Options « NationsGlory : commandes » : salons permis et rôle requis."""
+        if problem := command_refusal(self.state(interaction.guild_id), interaction):
+            raise CommandRefused(problem)
+        return True
 
     # ---- État par serveur -------------------------------------------------------------
     @staticmethod
@@ -323,12 +403,22 @@ class NGSync(VeilleMixin, commands.Cog):
         except ConfigError as e:
             errors.append(f"NationsGlory : {e}")
         else:
-            for key, label in (("role_en_jeu_id", "« connecté en jeu »"), ("role_inactif_id", "« inactif »")):
+            special = (("role_en_jeu_id", "« connecté en jeu »"), ("role_inactif_id", "« inactif »"),
+                       ("role_patron_id", "« patron »"), ("role_employe_id", "« employé »"))
+            for key, label in special:
                 role_id = int(ng.get(key, 0) or 0)
                 if role_id and role_id in settings.managed_roles:
                     errors.append(f"NationsGlory : le rôle {label} est déjà utilisé pour un grade ou le pays")
-            if int(ng.get("role_en_jeu_id", 0) or 0) and ng.get("role_en_jeu_id") == ng.get("role_inactif_id"):
-                errors.append("NationsGlory : les rôles « connecté en jeu » et « inactif » doivent être différents")
+            used: dict[int, str] = {}
+            for key, label in special:  # le bot les donne et les retire tout seul : un rôle pour une seule chose
+                role_id = int(ng.get(key, 0) or 0)
+                if role_id and role_id in used:
+                    errors.append(f"NationsGlory : les rôles {used[role_id]} et {label} doivent être différents")
+                elif role_id:
+                    used[role_id] = label
+        fmt = str(ng.get("format_surnom") or "{pseudo}")
+        if "{pseudo}" not in fmt:
+            errors.append("NationsGlory : le format du surnom doit contenir {pseudo}")
         return errors
 
     async def before_panel_save(self, guild: discord.Guild, section: str, values: dict) -> None:
@@ -419,8 +509,13 @@ class NGSync(VeilleMixin, commands.Cog):
                 await self._apply(member, plan, st, "Synchro des grades NationsGlory")
             if entry and entry["username"] != link["ng_name"]:
                 await self.store.rename_link(member.guild.id, member.id, entry["username"])  # bonne casse du pseudo
-            if st.rename:
-                await self._rename(member, entry["username"] if entry else link["ng_name"])
+            if st.rename and not any(r.id in st.no_rename_roles for r in member.roles):
+                pseudo = entry["username"] if entry else link["ng_name"]
+                grade = None
+                if entry:
+                    custom = await self._role_names(st) if "{grade}" in st.nick_format else {}
+                    grade = custom.get(entry.get("role")) or rank_label(entry.get("role"))
+                await self._rename(member, format_nick(st.nick_format, pseudo, grade, st.country_name))
             return plan, entry
 
     async def sync_all(self, guild: discord.Guild, st: GuildNG, members: dict[str, dict] | None = None) -> tuple[int, int, int]:
@@ -459,6 +554,7 @@ class NGSync(VeilleMixin, commands.Cog):
         await self.sync_special_roles(guild, st, members, online_now)
         if st.announce_channel_id:
             await self.announce_country_changes(guild, st, members)
+        await self.auto_link_pass(guild, st, members)
         checked, changed, errors = await self.sync_all(guild, st, members)
         if changed or errors:
             log.info("%s : synchro NG, %d vérifié(s), %d mis à jour, %d erreur(s)", guild.name, checked, changed, errors)
@@ -489,7 +585,10 @@ class NGSync(VeilleMixin, commands.Cog):
             if st.stats_channel_id and now - st.last_status >= st.status_interval * 60:
                 st.last_status = now
                 steps.append(("stats", self.run_status))
-            if st.war_channel_id and now - st.last_alerts >= ALERTS_EVERY:
+            if st.online_channel_id and now - st.last_online_board >= st.online_interval * 60:
+                st.last_online_board = now
+                steps.append(("en jeu", self.run_online_board))
+            if (st.war_channel_id or st.assault_channel_id) and now - st.last_alerts >= ALERTS_EVERY:
                 st.last_alerts = now
                 steps.append(("alertes", self.run_alerts))
             if st.warzone_channel_id and now - st.last_warzone >= WARZONE_EVERY:
@@ -500,9 +599,23 @@ class NGSync(VeilleMixin, commands.Cog):
             if st.forum_channel_id and now - st.last_forum >= FORUM_EVERY:
                 st.last_forum = now
                 steps.append(("forum", self.run_forum))
+            wants_enterprises = ((st.announce_channel_id and st.announce_enterprises) or st.enterprise_roles
+                                 or st.patron_role_id or st.employee_role_id)
+            if wants_enterprises and now - st.last_enterprises >= ENTERPRISES_EVERY:
+                st.last_enterprises = now
+                steps.append(("entreprises", self.run_enterprises))
+            if st.enterprise_channels and now - st.last_enterprise_channels >= st.enterprise_interval * 60:
+                st.last_enterprise_channels = now
+                steps.append(("salons des entreprises", self.run_enterprise_channels))
             if st.market_channel_id and now - st.last_market >= MARKET_EVERY:
                 st.last_market = now
                 steps.append(("marché", self.run_market))
+            if st.hdv_channel_id and st.hdv_items and now - st.last_hdv >= HDV_EVERY:
+                st.last_hdv = now
+                steps.append(("hôtel des ventes", self.run_hdv))
+            if st.lottery_channel_id and now - st.last_lotteries >= LOTTERIES_EVERY:
+                st.last_lotteries = now
+                steps.append(("loteries", self.run_lotteries))
             if st.track_activity:
                 steps.append(("activité", lambda g, s: self.check_activity(s)))
             for name, step in steps:  # une étape qui plante empêche pas les autres
@@ -555,15 +668,138 @@ class NGSync(VeilleMixin, commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        """Un membre lié revient sur le Discord : on lui redonne ses rôles."""
+        """Un membre lié revient : on lui redonne ses rôles. Sinon on essaie de le lier par son nom,
+        et si on trouve pas, on lui demande son pseudo NationsGlory."""
         st = self.state(member.guild.id)
-        link = await self.store.get_link(member.guild.id, member.id) if st else None
-        if link is None:
+        if st is None or member.bot:
             return
+        link = await self.store.get_link(member.guild.id, member.id)
         try:
-            await self.sync_member(member, link, st)
+            if link is not None:
+                await self.sync_member(member, link, st)
+            elif not await self.try_auto_link(member, st) and st.ask_pseudo:
+                await self.ask_member(member, st)
         except ServiceError as e:
             log.warning("Synchro de %s à son arrivée : %s", member, e)
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """Un membre pas lié change de surnom (ex. il met son pseudo NG) : on réessaie la liaison automatique."""
+        if before.nick == after.nick or after.bot:
+            return
+        st = self.state(after.guild.id)
+        if st is None or not st.auto_link or await self.store.get_link(after.guild.id, after.id):
+            return
+        try:
+            await self.try_auto_link(after, st)
+        except ServiceError as e:
+            log.warning("Liaison automatique de %s : %s", after, e)
+
+    # ---- Liaison automatique et demande du pseudo ---------------------------------------------
+    async def try_auto_link(self, member: discord.Member, st: GuildNG, members: dict[str, dict] | None = None,
+                            taken: set[str] | None = None) -> str | None:
+        """Lie le membre si un de ses noms Discord correspond à un membre du pays. Retourne le pseudo, ou None."""
+        if not st.auto_link or member.bot:
+            return None
+        members = members if members is not None else await st.members(max_age=300)
+        if taken is None:
+            taken = {link["ng_name"].lower() for link in await self.store.all_links(member.guild.id)}
+        name = match_member(candidate_names(member), members, taken)
+        if name is None:
+            return None
+        entry = members[name.lower()]
+        channel = member.guild.get_channel(st.validation_channel_id) if st.validation_channel_id else None
+        if entry.get("role") in HIGH_RANKS and channel is not None:
+            # Chef ou officier : n'importe qui pourrait prendre ce nom, un officier doit valider
+            key = f"ng_auto_demande:{member.guild.id}:{member.id}:{name.lower()}"
+            if await self.store.get_value(key):
+                return None
+            await self.store.set_value(key, "1")
+            embed = make_embed("🔗 Liaison à valider (nom identique)", BLUE, user=member,
+                               description=f"{member.mention} porte le nom de **{name}** "
+                                           f"({rank_label(entry.get('role'))} de {st.country_name}).")
+            view = discord.ui.View(timeout=None)
+            view.add_item(LinkButton("ok", member.id, name))
+            view.add_item(LinkButton("no", member.id, name))
+            await channel.send(embed=embed, view=view)
+            return None
+        summary = await self._link(member, name, st)
+        log.info("%s : %s lié automatiquement à %s (même nom)", member.guild.name, member, name)
+        if channel is not None:
+            embed = make_embed("🔗 Liaison automatique", GREEN, user=member,
+                               description=f"{member.mention} ↔ **{name}** (même nom sur Discord et NationsGlory)")
+            embed.add_field(name=f"Grade dans {st.country_name}", value=rank_label(entry.get("role")))
+            view = discord.ui.View(timeout=None)
+            view.add_item(UndoButton(member.id, name))
+            await channel.send(embed=embed, view=view)
+        await self._dm_link(st, member, f"🔗 Ton compte Discord a été lié tout seul à **{name}** sur NationsGlory (même nom).\n"
+                               f"{summary}\nSi c'est pas toi, fais `/delier` sur le serveur.")
+        return name
+
+    async def ask_member(self, member: discord.Member, st: GuildNG) -> bool:
+        """Demande son pseudo NationsGlory au membre : en MP, sinon dans le salon de liaison (une seule fois)."""
+        key = f"ng_demande:{member.guild.id}:{member.id}"
+        if await self.store.get_value(key):
+            return False
+        await self.store.set_value(key, "1")
+        embed = discord.Embed(
+            title=f"🔗 Bienvenue sur le serveur de {st.country_name}!", color=BLUE,
+            description=f"Je trouve pas ton pseudo NationsGlory parmi les membres de **{st.country_name}**.\n"
+                        "Clique sur le bouton et écris ton pseudo : tu recevras ton grade tout seul.",
+        )
+        try:
+            await member.send(embed=embed, view=ask_view(member.guild.id))
+            return True
+        except discord.HTTPException:
+            pass  # MP fermés
+        channel = member.guild.get_channel(st.link_channel_id) if st.link_channel_id else None
+        if channel is None:
+            return False
+        try:
+            await channel.send(member.mention, embed=embed, view=ask_view(member.guild.id),
+                               allowed_mentions=discord.AllowedMentions(users=[member]))
+            return True
+        except discord.HTTPException:
+            return False
+
+    async def auto_link_pass(self, guild: discord.Guild, st: GuildNG, members: dict[str, dict]) -> int:
+        """À chaque synchro : essaie de lier les membres du Discord qui le sont pas encore."""
+        if not st.auto_link:
+            return 0
+        links = await self.store.all_links(guild.id)
+        linked = {link["discord_id"] for link in links}
+        taken = {link["ng_name"].lower() for link in links}
+        everyone = guild.members.values() if isinstance(guild.members, dict) else guild.members
+        done = 0
+        for member in list(everyone):
+            if member.bot or member.id in linked:
+                continue
+            if name := await self.try_auto_link(member, st, members, taken):
+                taken.add(name.lower())
+                done += 1
+        return done
+
+    async def undo_auto_link(self, interaction: discord.Interaction, user_id: int, name: str) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        validator = interaction.guild.get_member(interaction.user.id)
+        if validator is None or not self._can_validate(validator, st):
+            return await reply(interaction, "⛔ T'as pas le droit d'annuler une liaison.")
+        link = await self.store.get_link(interaction.guild.id, user_id)
+        target = interaction.guild.get_member(user_id)
+        if link is None or link["ng_name"].lower() != name.lower():
+            return await reply(interaction, "Cette liaison existe déjà plus.")
+        if target is not None:
+            await self._unlink(target, link, st, by=interaction.user)
+        else:
+            await self.store.remove_link(interaction.guild.id, user_id)
+        embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else make_embed("Liaison", GREY)
+        embed.color = GREY
+        embed.add_field(name="Décision", value=f"↩️ Annulée par {interaction.user.mention}", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+        if target is not None:
+            await self._dm_link(st, target, f"↩️ La liaison avec **{name}** a été annulée par un officier. Fais `/lier` avec ton vrai pseudo.")
 
     # ---- Salon de statut (qui est en ligne + guerres) ------------------------------------------
     async def _edit_or_send(self, channel, key: str, **content) -> None:
@@ -604,10 +840,14 @@ class NGSync(VeilleMixin, commands.Cog):
             role = m.get("role")
             if name_key not in previous:
                 if st.announce["arrivees"]:
-                    lines.append(f"👋 {who(name_key, m['username'])} rejoint **{st.country_name}** comme {rank_label(role)}!")
-            elif st.announce["promotions"] and role in RANKS and previous[name_key][1] in RANKS:
-                if RANKS.index(role) < RANKS.index(previous[name_key][1]):
+                    lines.append(fill(st.arrival_message, joueur=who(name_key, m["username"]),
+                                      pays=st.country_name, grade=rank_label(role)))
+            elif role in RANKS and previous[name_key][1] in RANKS:
+                before = RANKS.index(previous[name_key][1])
+                if st.announce["promotions"] and RANKS.index(role) < before:
                     lines.append(f"🎉 {who(name_key, m['username'])} passe **{rank_label(role)}**!")
+                elif st.announce["retrogradations"] and RANKS.index(role) > before:
+                    lines.append(f"🔻 {who(name_key, m['username'])} redescend **{rank_label(role)}**.")
         if st.announce["departs"]:
             for name_key in previous.keys() - members.keys():
                 lines.append(f"🚪 **{discord.utils.escape_markdown(previous[name_key][0])}** a quitté {st.country_name}.")
@@ -619,7 +859,13 @@ class NGSync(VeilleMixin, commands.Cog):
         if len(lines) > 10:
             lines = lines[:10] + [f"… et {len(lines) - 10} autres changements."]
         users = [discord.Object(uid) for uid in linked.values()]
-        await channel.send("\n".join(lines), allowed_mentions=discord.AllowedMentions(users=users, roles=False, everyone=False))
+        text = "\n".join(lines)
+        roles: list = []
+        if st.announce_role_id:
+            text = f"<@&{st.announce_role_id}>\n{text}"
+            roles = [discord.Object(st.announce_role_id)]
+        await channel.send(truncate(text, 2000),
+                           allowed_mentions=discord.AllowedMentions(users=users, roles=roles, everyone=False))
         return lines
 
     async def update_stats_message(self, guild: discord.Guild, st: GuildNG) -> None:
@@ -654,10 +900,11 @@ class NGSync(VeilleMixin, commands.Cog):
     async def _save(self, key: str, value) -> None:
         await self.store.set_value(key, json.dumps(value))
 
-    async def collect_alerts(self, guild: discord.Guild, st: GuildNG) -> tuple[list[str], bool]:
-        """Compare l'état du pays au tour d'avant. Retourne (lignes à publier, mentionner le rôle?)."""
+    async def collect_alerts(self, guild: discord.Guild, st: GuildNG) -> tuple[list[str], bool, list[str]]:
+        """Compare l'état du pays au tour d'avant. Retourne (lignes à publier, alerte grave?, lignes des assauts)."""
         cid = await st.country()
         lines: list[str] = []
+        assault_lines: list[str] = []
         important = False
 
         # Guerres du pays : déclarations, débuts, fins, assauts
@@ -683,7 +930,7 @@ class NGSync(VeilleMixin, commands.Cog):
                     known = 0  # guerre qui vient de commencer : tous ses assauts sont nouveaux
                 # sinon (premier tour, option qu'on vient d'activer) : on prend note sans annoncer
                 events, new_assaults[wid] = alerts.assault_events(detail, known, cid)
-                lines += [alerts.war_line(e, cid) for e in events]
+                assault_lines += [alerts.war_line(e, cid) for e in events]
         await self._save(key, {"statuts": alerts.war_snapshot(wars), "assauts": new_assaults})
 
         # Power du pays et ennemis attaquables
@@ -711,24 +958,31 @@ class NGSync(VeilleMixin, commands.Cog):
             more, grave = await self.diplomacy_and_watch(guild, st, card)
             lines += more
             important |= grave
-        return lines, important
+        return lines, important, assault_lines
 
     async def run_alerts(self, guild: discord.Guild, st: GuildNG) -> list[str]:
-        lines, important = await self.collect_alerts(guild, st)
-        if not lines:
-            return []
-        channel = self._channel(guild, st.war_channel_id, st, "guerres et alertes")
-        if channel is None:
-            return lines
+        """Publie les alertes. Les assauts vont dans leur propre salon s'il est choisi. Retourne toutes les lignes."""
+        lines, important, assault_lines = await self.collect_alerts(guild, st)
+        separate = bool(st.assault_channel_id) and st.assault_channel_id != st.war_channel_id
+        if not separate:
+            lines, assault_lines = lines + assault_lines, []
+        if assault_lines and (channel := self._channel(guild, st.assault_channel_id, st, "assauts")):
+            await self._post_alert(channel, st, assault_lines, False)
+        if lines and st.war_channel_id and (channel := self._channel(guild, st.war_channel_id, st, "guerres et alertes")):
+            await self._post_alert(channel, st, lines, important)
+        return lines + assault_lines
+
+    @staticmethod
+    async def _post_alert(channel, st: GuildNG, lines: list[str], important: bool) -> None:
         if len(lines) > 15:
             lines = lines[:15] + [f"… et {len(lines) - 15} autres."]
         text = "\n".join(lines)
         roles = []
-        if important and st.alert_role_id:
+        mention = st.alert_mention == "toutes" or (st.alert_mention == "graves" and important)
+        if mention and st.alert_role_id:
             text = f"<@&{st.alert_role_id}>\n{text}"
             roles = [discord.Object(st.alert_role_id)]
         await channel.send(truncate(text, 2000), allowed_mentions=discord.AllowedMentions(roles=roles, users=False, everyone=False))
-        return lines
 
     async def run_warzone(self, guild: discord.Guild, st: GuildNG) -> bool:
         """Publie le classement warzone quand une journée (ou une semaine, le dimanche) est close à 20 h, heure de Paris."""
@@ -745,7 +999,7 @@ class NGSync(VeilleMixin, commands.Cog):
             if e.status == 503:
                 return False  # pas encore de période close publiée sur ce serveur
             raise
-        day, top, ours = alerts.warzone_summary(rows, cid)
+        day, top, ours = alerts.warzone_summary(rows, cid, st.warzone_top)
         key = f"ng_warzone{'' if period == 'daily' else '_semaine'}:{guild.id}"
         if not day or await self.store.get_value(key) == day:
             return False
@@ -794,8 +1048,15 @@ class NGSync(VeilleMixin, commands.Cog):
         if name is None:
             await self._save(self._activity_key(st), logins)
             return None
-        value = await st.api.last_login(name)
-        logins[name.lower()] = [value or "none", now]
+        # La fiche publique donne d'un coup la dernière connexion ici, le temps de jeu, les succès et le grade
+        # boutique. Un joueur sans compte sur le site a pas de fiche (404) : on lit juste sa dernière connexion.
+        profile = await st.api.profile(name, max_age=60)
+        fallback = None
+        here = next((x for x in (profile or {}).get("servers") or []
+                     if isinstance(x, dict) and x.get("server") == st.api.server), {})
+        if profile is None or (not profile.get("private") and not here.get("last_login_on")):
+            fallback = await st.api.last_login(name)
+        logins[name.lower()] = insights.profile_entry(profile, st.api.server, fallback, now)
         await self._save(self._activity_key(st), logins)
         return name
 
@@ -822,7 +1083,7 @@ class NGSync(VeilleMixin, commands.Cog):
             embed.add_field(name="Décision", value=f"✖️ Refusé par {interaction.user.mention}", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             if target:
-                await self._dm(target, f"✖️ Ta demande de liaison avec **{name}** a été refusée.")
+                await self._dm_link(st, target, f"✖️ Ta demande de liaison avec **{name}** a été refusée.")
             return
 
         problem = None
@@ -840,7 +1101,12 @@ class NGSync(VeilleMixin, commands.Cog):
         embed.add_field(name="Décision", value=f"✅ Accepté par {interaction.user.mention}", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         summary = await self._link(target, name, st, by=interaction.user)
-        await self._dm(target, f"✅ Ton compte Discord est lié à **{name}** sur NationsGlory!\n{summary}")
+        await self._dm_link(st, target, f"✅ Ton compte Discord est lié à **{name}** sur NationsGlory!\n{summary}")
+
+    async def _dm_link(self, st: GuildNG, member: discord.Member, text: str) -> None:
+        """MP au sujet de la liaison du compte (option « Prévenir le membre en MP »)."""
+        if st.dm_links:
+            await self._dm(member, text)
 
     @staticmethod
     async def _dm(member: discord.Member, text: str) -> None:
@@ -876,16 +1142,21 @@ class NGSync(VeilleMixin, commands.Cog):
     @app_commands.checks.cooldown(1, 60.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.guild_only()
     async def lier(self, interaction: discord.Interaction, pseudo: Pseudo) -> None:
-        st = await self._st(interaction)
+        await self.request_link(interaction, interaction.user, pseudo)
+
+    async def request_link(self, interaction: discord.Interaction, member: discord.Member, pseudo: str) -> None:
+        """/lier ou le formulaire du bouton « Lier mon compte » (qui peut venir d'un MP)."""
+        guild = member.guild
+        st = self.state(guild.id)
         if st is None:
-            return
-        guild_id = interaction.guild.id
+            return await reply(interaction, "La synchro NationsGlory est pas activée sur ce serveur (voir le panel).")
+        guild_id = guild.id
         pseudo = pseudo.strip()
         if not NAME_RE.match(pseudo):
             return await reply(interaction, "Pseudo invalide (lettres, chiffres et _ seulement).")
         await interaction.response.defer(ephemeral=True)
 
-        if link := await self.store.get_link(guild_id, interaction.user.id):
+        if link := await self.store.get_link(guild_id, member.id):
             return await reply(interaction, f"Ton compte est déjà lié à **{link['ng_name']}**. Fais `/delier` d'abord.")
         if await self.store.get_link_by_name(guild_id, pseudo):
             return await reply(interaction, f"**{pseudo}** est déjà lié à un autre membre. Contacte un officier si c'est une erreur.")
@@ -896,24 +1167,37 @@ class NGSync(VeilleMixin, commands.Cog):
         name = entry["username"] if entry else pseudo
 
         if not st.validation_channel_id:
-            summary = await self._link(interaction.user, name, st)
+            summary = await self._link(member, name, st)
             return await reply(interaction, f"✅ Ton compte est lié à **{name}**!\n{summary}")
 
-        channel = interaction.guild.get_channel(st.validation_channel_id)
+        channel = guild.get_channel(st.validation_channel_id)
         if channel is None:
-            log.error("%s : salon de validation %s introuvable", interaction.guild.name, st.validation_channel_id)
+            log.error("%s : salon de validation %s introuvable", guild.name, st.validation_channel_id)
             return await reply(interaction, "⚠️ Le salon de validation est mal configuré. Préviens un admin.")
         embed = make_embed(
-            "🔗 Demande de liaison", BLUE, user=interaction.user,
-            description=f"{interaction.user.mention} dit être **{name}** sur NationsGlory.",
+            "🔗 Demande de liaison", BLUE, user=member,
+            description=f"{member.mention} dit être **{name}** sur NationsGlory.",
         )
         embed.add_field(name=f"Grade dans {st.country_name}", value=rank_label(entry["role"]) if entry else "Pas dans le pays")
-        embed.add_field(name="Compte Discord créé", value=discord.utils.format_dt(interaction.user.created_at, "R"))
+        embed.add_field(name="Compte Discord créé", value=discord.utils.format_dt(member.created_at, "R"))
         view = discord.ui.View(timeout=None)
-        view.add_item(LinkButton("ok", interaction.user.id, name))
-        view.add_item(LinkButton("no", interaction.user.id, name))
+        view.add_item(LinkButton("ok", member.id, name))
+        view.add_item(LinkButton("no", member.id, name))
         await channel.send(embed=embed, view=view)
         await reply(interaction, "📨 Demande envoyée aux officiers. Tu vas recevoir un MP quand elle sera acceptée.")
+
+    @app_commands.command(name="liaison-panneau", description="Publie le bouton « Lier mon compte NationsGlory » dans ce salon")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def liaison_panneau(self, interaction: discord.Interaction) -> None:
+        st = await self._st(interaction)
+        if st is None:
+            return
+        embed = discord.Embed(title=f"🔗 Lier ton compte NationsGlory · {st.country_name}", color=BLUE, description=(
+            "Clique sur le bouton et écris ton pseudo NationsGlory.\n"
+            "Ton grade du pays devient ton rôle Discord, et il se met à jour tout seul."))
+        await interaction.channel.send(embed=embed, view=ask_view(interaction.guild.id))
+        await reply(interaction, "✅ Panneau publié.")
 
     @app_commands.command(name="delier", description="Délie ton compte NationsGlory")
     @app_commands.guild_only()
@@ -1019,7 +1303,7 @@ class NGSync(VeilleMixin, commands.Cog):
         st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         if nom and nom.strip().lower() != st.country_name.lower():
             try:
                 cid, _ = await st.api.resolve_country(nom)
@@ -1040,7 +1324,7 @@ class NGSync(VeilleMixin, commands.Cog):
         st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         members = await st.members()
         online = await st.api.online()
         here = insights.online_members(members, online)
@@ -1058,7 +1342,7 @@ class NGSync(VeilleMixin, commands.Cog):
         if not here:
             embed.description += "\nPersonne du pays pour l'instant. 😴"
         embed.set_footer(text="Liste des connectés mise à jour aux 5 minutes par NationsGlory")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     async def _role_names(self, st: GuildNG) -> dict[str, str]:
         """Noms de grades choisis par le pays (Empereur, Conseiller…), si la fiche les donne."""
@@ -1079,7 +1363,7 @@ class NGSync(VeilleMixin, commands.Cog):
             return
         if critere not in insights.RANKINGS:
             return await reply(interaction, "Critère inconnu.")
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         cid = await st.country()
         rows = insights.ranking(await st.api.countries(max_age=300), critere)
         lines, ours = insights.ranking_lines(rows, critere, cid)
@@ -1089,7 +1373,7 @@ class NGSync(VeilleMixin, commands.Cog):
         if ours:
             embed.add_field(name=st.country_name, value=ours, inline=False)
         embed.set_footer(text=f"{len(rows)} pays avec des membres · données NationsGlory")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     @app_commands.command(name="guerre", description="Le détail d'une guerre : assauts, missiles, accords")
     @app_commands.describe(numero="Le numéro de la guerre (dans /guerres)")
@@ -1098,7 +1382,7 @@ class NGSync(VeilleMixin, commands.Cog):
         st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         war = await st.api.war(numero)
         if war is None:
             return await reply(interaction, f"La guerre n°{numero} existe pas (ou est finie depuis plus de 30 jours).")
@@ -1119,7 +1403,7 @@ class NGSync(VeilleMixin, commands.Cog):
             embed.add_field(name="🏆 Vainqueur", value=war.get(f"{winner}_name") or "?", inline=False)
         for name, value in insights.war_detail_lines(war, {}):
             embed.add_field(name=name, value=truncate(value), inline=False)
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     @app_commands.command(name="alliance", description="L'alliance du pays (ou celle d'un autre pays)")
     @app_commands.describe(pays="Un autre pays du même serveur")
@@ -1128,7 +1412,7 @@ class NGSync(VeilleMixin, commands.Cog):
         st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         if pays:
             try:
                 cid, cname = await st.api.resolve_country(pays)
@@ -1143,7 +1427,7 @@ class NGSync(VeilleMixin, commands.Cog):
         key = row.get("alliance_key")
         data = await st.api.alliance(key) if key else None
         if data is None:
-            return await reply(interaction, f"**{cname}** est dans aucune alliance.", ephemeral=False)
+            return await reply(interaction, f"**{cname}** est dans aucune alliance.", ephemeral=st.private_replies)
         members = sorted((c.get("name") or "?" for c in countries if c.get("alliance_key") == key), key=str.lower)
         embed = discord.Embed(title=f"🛡️ Alliance {data.get('name')}", color=BLUE)
         if desc := data.get("description"):
@@ -1157,7 +1441,7 @@ class NGSync(VeilleMixin, commands.Cog):
         embed.add_field(name="Candidatures", value="Ouvertes" if data.get("opened") else "Fermées")
         if members:
             embed.add_field(name=f"Pays ({len(members)})", value=truncate(", ".join(members)), inline=False)
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     @app_commands.command(name="inactifs", description="Les membres du pays pas connectés depuis X jours")
     @app_commands.describe(jours="Depuis combien de jours (7 par défaut)")
@@ -1198,7 +1482,7 @@ class NGSync(VeilleMixin, commands.Cog):
         st = await self._st(interaction)
         if st is None:
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=st.private_replies)
         cid = await st.country()
         wars = await st.api.wars(cid)
         embed = discord.Embed(title=f"⚔️ Guerres de {st.country_name}", color=RED)
@@ -1226,7 +1510,7 @@ class NGSync(VeilleMixin, commands.Cog):
         if not wars:
             embed.description = "Aucune guerre en cours, et aucune finie dans les 30 derniers jours. 🕊️"
         embed.set_footer(text="Données NationsGlory, mises à jour aux 10 minutes")
-        await reply(interaction, embed=embed, ephemeral=False)
+        await reply(interaction, embed=embed, ephemeral=st.private_replies)
 
     # ---- Commandes admin : /synchro ... -------------------------------------------------------
     @synchro.command(name="tout", description="Synchronise tous les comptes liés maintenant")

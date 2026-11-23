@@ -15,6 +15,14 @@ CREATE TABLE IF NOT EXISTS ng_links (
     PRIMARY KEY (guild_id, discord_id),
     UNIQUE (guild_id, ng_name)
 );
+CREATE TABLE IF NOT EXISTS ng_employees (
+    guild_id   INTEGER NOT NULL,
+    enterprise TEXT NOT NULL,
+    discord_id INTEGER NOT NULL,
+    added_by   INTEGER NOT NULL,
+    added_at   INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, enterprise, discord_id)
+);
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -59,6 +67,10 @@ class Store:
         row = await self._one("SELECT value FROM kv WHERE key = ?", (key,))
         return row["value"] if row else None
 
+    async def keys(self, prefix: str) -> list[str]:
+        rows = await self._all("SELECT key FROM kv WHERE key >= ? AND key < ?", (prefix, prefix + "\uffff"))
+        return [r["key"] for r in rows]
+
     async def set_value(self, key: str, value: str) -> None:
         await self._run("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value))
 
@@ -84,3 +96,22 @@ class Store:
     async def remove_link(self, guild_id: int, discord_id: int) -> bool:
         cur = await self._run("DELETE FROM ng_links WHERE guild_id = ? AND discord_id = ?", (guild_id, discord_id))
         return cur.rowcount > 0
+
+    # ---- Employés des entreprises (l'API les nomme pas : c'est le patron qui les ajoute) ------------
+    async def add_employee(self, guild_id: int, enterprise: str, discord_id: int, added_by: int) -> bool:
+        cur = await self._run(
+            "INSERT OR IGNORE INTO ng_employees (guild_id, enterprise, discord_id, added_by, added_at) VALUES (?, ?, ?, ?, ?)",
+            (guild_id, enterprise, discord_id, added_by, int(time.time())),
+        )
+        return cur.rowcount > 0
+
+    async def remove_employee(self, guild_id: int, enterprise: str, discord_id: int) -> bool:
+        cur = await self._run("DELETE FROM ng_employees WHERE guild_id = ? AND enterprise = ? AND discord_id = ?",
+                              (guild_id, enterprise, discord_id))
+        return cur.rowcount > 0
+
+    async def employees(self, guild_id: int, enterprise: str | None = None) -> list[dict]:
+        if enterprise is None:
+            return await self._all("SELECT * FROM ng_employees WHERE guild_id = ? ORDER BY enterprise, added_at", (guild_id,))
+        return await self._all("SELECT * FROM ng_employees WHERE guild_id = ? AND enterprise = ? ORDER BY added_at",
+                               (guild_id, enterprise))

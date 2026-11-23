@@ -87,9 +87,13 @@ def extract_page(data: Any) -> tuple[list[dict], str | None]:
         if isinstance(data.get(key), list):
             items = data[key]
             break
-    for container in (data, data.get("meta"), data.get("pagination"), data.get("page"), data.get("links")):
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    # La vraie API met le curseur dans meta.page : {"next_cursor": "...", "has_more": true}
+    for container in (meta.get("page"), data, meta, data.get("pagination"), data.get("page"), data.get("links")):
         if not isinstance(container, dict):
             continue
+        if container.get("has_more") is False:
+            break  # dernière page, même si un curseur traîne
         for key in ("next_cursor", "nextCursor", "cursor_next", "next"):
             value = container.get(key)
             if isinstance(value, str) and value:
@@ -508,3 +512,33 @@ class NationsGlory:
             threads = (data.get("threads") or data.get("data")) if isinstance(data, dict) else data
             return [t for t in threads or [] if isinstance(t, dict)]
         return await self._shared(f"forum:{int(category)}:{limit}", max_age, fetch)
+
+    # ---- Fiche d'une entreprise et son activité -------------------------------------------------
+    async def enterprise(self, name: str, *, max_age: float = 300) -> dict | None:
+        """Fiche complète d'une entreprise (domaine enterprise, aux 10 min). None si elle existe plus."""
+        if not name or len(name) > 64:
+            return None
+
+        async def fetch():
+            data = unwrap(await self._get(f"/servers/{self.server}/enterprises/{quote(name, safe='')}"))
+            return data if isinstance(data, dict) else None
+        return await self._shared(f"enterprise:{name}", max_age, fetch)
+
+    async def _enterprise_list(self, name: str, what: str, params: dict | None, max_age: float) -> list[dict]:
+        async def fetch():
+            data = await self._get(f"/servers/{self.server}/enterprises/{quote(name, safe='')}/{what}", params)
+            rows, _ = extract_page(data)
+            return rows
+        return await self._shared(f"enterprise:{name}:{what}", max_age, fetch)
+
+    async def enterprise_operations(self, name: str, *, days: int = 14) -> list[dict]:
+        """Ferme (récoltes), trader (rendement) ou paris : un élément par activité, [] pour les autres types."""
+        return await self._enterprise_list(name, "operations", {"history_days": max(1, min(90, days))}, 1800)
+
+    async def enterprise_energy(self, name: str, *, days: int = 14) -> list[dict]:
+        """Électricité et/ou pétrole produits. [] si l'entreprise produit pas d'énergie."""
+        return await self._enterprise_list(name, "energy", {"history_days": max(1, min(90, days))}, 1800)
+
+    async def enterprise_parcels(self, name: str) -> list[dict]:
+        """Parcelles d'une entreprise immobilière."""
+        return await self._enterprise_list(name, "parcels", None, 1800)

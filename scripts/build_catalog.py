@@ -61,21 +61,73 @@ def build() -> tuple[dict, dict[str, bytes]]:
     return index, zips
 
 
+def obsolete_zips(existing: list[str], current: dict[str, bytes]) -> list[str]:
+    """Les zips à effacer. On garde la version d'avant de chaque plugin : un panel qui a encore
+    l'ancien index.json en cache (10 min, plus le cache de GitHub) peut quand même l'installer,
+    au lieu d'avoir « Le catalogue répond HTTP 404 »."""
+    def split(name: str) -> tuple[str, tuple[int, ...]] | None:
+        stem = name.removesuffix(".zip")
+        pid, _, version = stem.rpartition("-")
+        try:
+            return pid, tuple(int(x) for x in version.split("."))
+        except ValueError:
+            return None
+
+    current_ids = {split(n)[0]: split(n)[1] for n in current if split(n)}
+    keep: dict[str, tuple[tuple[int, ...], str]] = {}
+    for name in existing:
+        parsed = split(name)
+        if name in current or parsed is None or parsed[0] not in current_ids or parsed[1] >= current_ids[parsed[0]]:
+            continue
+        if parsed[0] not in keep or parsed[1] > keep[parsed[0]][0]:
+            keep[parsed[0]] = (parsed[1], name)
+    kept = {name for _, name in keep.values()}
+    return [n for n in existing if n not in current and n not in kept]
+
+
+def zip_contents(data: bytes) -> list[tuple[str, bytes]]:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        return sorted((i.filename, z.read(i)) for i in z.infolist())
+
+
+def check(index: dict, zips: dict[str, bytes]) -> list[str]:
+    """Compare le CONTENU des zips, pas leurs octets : deux versions de zlib (zlib et zlib-ng, par
+    exemple sur GitHub Actions) compressent les mêmes fichiers différemment. Vérifie aussi que
+    index.json correspond aux zips publiés (sha256 et taille), puisque c'est ce que le panel contrôle."""
+    if not INDEX.is_file():
+        return ["plugins/index.json"]
+    published = json.loads(INDEX.read_text(encoding="utf-8"))
+    problems = []
+    keys = ("id", "name", "version", "description", "author", "runtime", "download")
+    if [{k: e.get(k) for k in keys} for e in published.get("plugins", [])] != [{k: e[k] for k in keys} for e in index["plugins"]]:
+        problems.append("plugins/index.json")
+    for entry in published.get("plugins", []):
+        path = PLUGINS / entry.get("download", "")
+        name = path.name
+        if not path.is_file() or name not in zips:
+            problems.append(f"plugins/dist/{name}")
+            continue
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != entry.get("sha256") or len(data) != entry.get("size"):
+            problems.append(f"plugins/dist/{name} (sha256 ou taille différent de index.json)")
+        elif zip_contents(data) != zip_contents(zips[name]):
+            problems.append(f"plugins/dist/{name}")
+    return problems
+
+
 def main() -> int:
     index, zips = build()
     text = json.dumps(index, ensure_ascii=False, indent=2) + "\n"
     if "--check" in sys.argv:
-        problems = [] if INDEX.is_file() and INDEX.read_text(encoding="utf-8") == text else ["plugins/index.json"]
-        problems += [f"plugins/dist/{n}" for n, d in zips.items() if not (DIST / n).is_file() or (DIST / n).read_bytes() != d]
+        problems = check(index, zips)
         if problems:
             print("Catalogue pas à jour (lance python scripts/build_catalog.py) :", ", ".join(problems))
             return 1
         print(f"Catalogue à jour : {len(zips)} plugin(s)")
         return 0
     DIST.mkdir(exist_ok=True)
-    for old in DIST.glob("*.zip"):
-        if old.name not in zips:
-            old.unlink()
+    for old in obsolete_zips(sorted(p.name for p in DIST.glob("*.zip")), zips):
+        (DIST / old).unlink()
     for name, data in zips.items():
         (DIST / name).write_bytes(data)
     INDEX.write_text(text, encoding="utf-8")

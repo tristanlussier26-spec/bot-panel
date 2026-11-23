@@ -5,13 +5,13 @@
     {
       "id": "adminbuild",
       "name": "Construction du serveur",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "/adminbuild crée les rôles, catégories et salons d'un serveur de pays NationsGlory, puis règle les autres plugins tout seul.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/adminbuild-1.0.0.zip",
-      "sha256": "cd0077ab05aed238f6f55aacde5d0f6027e9cc8237f7510c22f0d35809ba4e92",
-      "size": 9714
+      "download": "dist/adminbuild-1.0.1.zip",
+      "sha256": "b3eadd2bd42ccd4fad81f5518b237cf2d186b1c6c900d8f6f5e2afcb5da42791",
+      "size": 10118
     },
     {
       "id": "automod",
@@ -93,13 +93,13 @@
     {
       "id": "nationsglory",
       "name": "Synchro NationsGlory",
-      "version": "1.3.0",
-      "description": "Tout NationsGlory dans Discord : grades ↔ rôles, /lier, alertes de guerre, de power et de diplomatie, pays surveillés, rapport du jour, warzone, annonces officielles, marché, HDV, classements, historique, en ligne et inactifs. Une seule clé de l'API officielle pour tous les serveurs.",
+      "version": "1.7.0",
+      "description": "Tout NationsGlory dans Discord : grades ↔ rôles avec liaison automatique des comptes, fiches des membres et des entreprises, rôles d'entreprise et employés, salon des membres en jeu avec leurs têtes, alertes de guerre, de power et de diplomatie, rapport du jour, warzone, marché, HDV, classements. Une seule clé de l'API officielle pour tous les serveurs.",
       "author": "tristanlussier26-spec",
       "runtime": "discord.py",
-      "download": "dist/nationsglory-1.3.0.zip",
-      "sha256": "c80d35e03c34c97440d29f8d88300872a082e440c8df10ae03271aaffb810e33",
-      "size": 53725
+      "download": "dist/nationsglory-1.7.0.zip",
+      "sha256": "dd5b4af8dce01d64de8f81b1b1bcc27398e37285529937fb7853ff71ad0916af",
+      "size": 81998
     },
     {
       "id": "niveaux",

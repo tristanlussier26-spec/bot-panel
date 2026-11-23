@@ -5,19 +5,28 @@ La logique (quoi publier) est dans veille.py, testable sans Discord.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import io
 import logging
+import time
 from datetime import datetime, timezone
 
 import discord
 
-from . import alerts, insights, veille
-from .common import BLUE, GREY, ServiceError, truncate
+from . import alerts, entreprises, insights, tetes, veille
+from .common import BLUE, GREEN, GREY, ServiceError, truncate
 from .logic import SyncPlan
 
 log = logging.getLogger("plugin.nationsglory")
 
 FORUM_EVERY = 10 * 60
+FACE_URL = "https://files.recube.gg/nationsglory/face/{}.png"
+FACE_MAX_AGE = 6 * 3600
+ENTERPRISES_EVERY = 10 * 60
 MARKET_EVERY = 15 * 60
+HDV_EVERY = 30 * 60
+LOTTERIES_EVERY = 10 * 60
 NEWS_COLOR = 0x5865F2
 
 
@@ -62,6 +71,8 @@ class VeilleMixin:
                     inactive = days is not None and days >= st.inactive_days
                 if inactive is True and st.inactive_role_id not in have:
                     plan.add_roles.add(st.inactive_role_id)
+                    if st.dm_inactive:
+                        await self._dm_inactive(member, st, entry)
                 elif inactive is False and st.inactive_role_id in have:
                     plan.remove_roles.add(st.inactive_role_id)
             elif st.inactive_role_id and st.inactive_role_id in have:
@@ -78,6 +89,94 @@ class VeilleMixin:
         if peak.get("day") != day or count > int(peak.get("max") or 0):
             await self._save(key, {"day": day, "max": max(count, int(peak.get("max") or 0) if peak.get("day") == day else 0)})
 
+    async def _dm_inactive(self, member: discord.Member, st, entry: list) -> None:
+        """MP (une fois par période d'inactivité) au membre qui reçoit le rôle « inactif »."""
+        key = f"ng_mp_inactif:{member.guild.id}:{member.id}"
+        seen = str(entry[0] if entry else "")
+        if await self.store.get_value(key) == seen:
+            return
+        await self.store.set_value(key, seen)
+        when = "depuis plus de 90 jours" if seen == "none" else f"depuis le {seen}"
+        try:
+            await member.send(f"😴 Salut! T'as pas joué sur NationsGlory ({st.api.server.capitalize()}) {when}.\n"
+                              f"**{st.country_name}** compte sur toi : reviens faire un tour quand tu peux!")
+        except discord.HTTPException:
+            pass  # MP fermés
+
+    # ---- Salon « en jeu » : les têtes des membres connectés ------------------------------------------
+    async def face(self, st, name: str) -> bytes | None:
+        """La tête du skin (même image que sur nationsglory.fr), gardée 6 h."""
+        cache = self.__dict__.setdefault("_faces", {})
+        hit = cache.get(name.lower())
+        if hit and time.monotonic() - hit[0] < FACE_MAX_AGE:
+            return hit[1]
+        data = None
+        try:
+            async with st.api._http().get(FACE_URL.format(name)) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+        except Exception:  # noqa: BLE001 - pas de tête : on dessine l'initiale
+            data = None
+        if len(cache) > 400:
+            cache.clear()
+        cache[name.lower()] = (time.monotonic(), data)
+        return data
+
+    async def run_online_board(self, guild: discord.Guild, st) -> bool:
+        """Met à jour le message du salon « en jeu ». Retourne True s'il a changé."""
+        channel = self._channel(guild, st.online_channel_id, st, "membres en jeu")
+        if channel is None:
+            return False
+        members = await st.members(max_age=300)
+        online = await st.api.online()
+        here = insights.online_members(members, online)
+        if st.online_allies:  # comptes liés du Discord qui sont pas dans le pays (alliés, invités)
+            for link in await self.store.all_links(guild.id):
+                key = link["ng_name"].lower()
+                if key in online and key not in members and guild.get_member(link["discord_id"]):
+                    here.append({"username": link["ng_name"], "role": None})
+        custom = await self._role_names(st)
+        signature = hashlib.sha1(("|".join(f"{m['username']}:{m.get('role')}" for m in here)
+                                  + f"|{st.online_faces}").encode()).hexdigest()
+        key = f"ng_enligne:{channel.id}"
+        saved = await self._load(key) or {}
+        if saved.get("sig") == signature and saved.get("id"):
+            return False
+        ours = sum(1 for m in here if m.get("role"))
+        title = f"🟢 {st.country_name} : {ours} en jeu" + (f" (+{len(here) - ours} hors du pays)" if len(here) > ours else "")
+        embed = discord.Embed(title=title, color=0x2ECC71 if here else GREY, timestamp=discord.utils.utcnow())
+        files = []
+        if here and st.online_faces:
+            faces = await asyncio.gather(*(self.face(st, m["username"]) for m in here))
+            people = [{"name": m["username"], "role": m.get("role"),
+                       "label": (custom.get(m.get("role")) or insights_rank(m.get("role"))) if m.get("role") else "Hors du pays",
+                       "face": f}
+                      for m, f in zip(here, faces)]
+            png = await asyncio.to_thread(tetes.render, people)
+            files.append(discord.File(io.BytesIO(png), filename="enligne.png"))
+            embed.set_image(url="attachment://enligne.png")
+        if here:
+            lines = []
+            for rank in ("LEADER", "OFFICER", "MEMBER", "RECRUIT", None):
+                names = [discord.utils.escape_markdown(m["username"]) for m in here if m.get("role") == rank]
+                if names:
+                    label = (custom.get(rank) or insights_rank(rank)) if rank else "Hors du pays"
+                    lines.append(f"**{label}** : {', '.join(names)}")
+            embed.description = truncate("\n".join(lines), 4000)
+        else:
+            embed.description = f"Personne de {st.country_name} est en jeu pour l'instant. 😴"
+        embed.set_footer(text=f"Sur {st.api.server.capitalize()} · mis à jour aux {st.online_interval} minutes")
+        message = None
+        if saved.get("id"):
+            try:
+                message = await channel.get_partial_message(int(saved["id"])).edit(embed=embed, attachments=files)
+            except discord.NotFound:
+                message = None
+        if message is None:
+            message = await channel.send(embed=embed, files=files)
+        await self._save(key, {"id": str(getattr(message, "id", saved.get("id"))), "sig": signature})
+        return True
+
     # ---- Rapport du jour --------------------------------------------------------------------------
     def report_due(self, st) -> str | None:
         """La date locale si c'est l'heure du rapport et qu'il est pas encore publié aujourd'hui."""
@@ -85,6 +184,8 @@ class VeilleMixin:
         day = now.date().isoformat()
         if now.hour < st.report_hour or st.last_report_day == day:
             return None
+        if getattr(st, "weekly_report", False) and now.weekday() != 6:
+            return None  # rapport de la semaine : le dimanche seulement
         return day
 
     async def build_report(self, guild: discord.Guild, st, *, save: bool = True) -> discord.Embed:
@@ -95,10 +196,13 @@ class VeilleMixin:
         now = veille.report_snapshot(card, members, countries, cid)
         key = f"ng_rapport:{guild.id}"
         previous = await self._load(key)
-        embed = discord.Embed(title=f"📰 Rapport du jour · {st.country_name}", color=BLUE,
+        period = "de la semaine" if getattr(st, "weekly_report", False) else "du jour"
+        embed = discord.Embed(title=f"📰 Rapport {period} · {st.country_name}", color=BLUE,
                               timestamp=discord.utils.utcnow())
         if previous is None:
-            embed.description = "Premier rapport : les variations apparaîtront à partir de demain."
+            embed.description = ("Premier rapport : les variations apparaîtront au prochain."
+                                 if getattr(st, "weekly_report", False)
+                                 else "Premier rapport : les variations apparaîtront à partir de demain.")
         elif isinstance(previous.get("at"), str):
             embed.description = f"Variations depuis le rapport du {previous['at']}."
         for name, value in veille.report_fields(previous, now):
@@ -130,6 +234,16 @@ class VeilleMixin:
         peak = await self._load(f"ng_pic:{guild.id}") or {}
         if peak.get("max"):
             extra.append(f"🟢 Pic de membres en ligne : {peak['max']}")
+        try:
+            ents = await self.country_enterprises(st, members)
+            tot = entreprises.totals(ents)
+            before = (previous or {}).get("entreprises_ca")
+            delta = f" ({veille.signed(tot['turnover'] - before, ' $')})" if isinstance(before, int) else ""
+            if tot["count"]:
+                extra.append(f"🏢 {tot['count']} entreprise(s) · chiffre d'affaires {veille.fmt(tot['turnover'])} ${delta}")
+            now["entreprises_ca"] = tot["turnover"]
+        except ServiceError:
+            pass
         logins = await self._logins(st)
         if logins:
             report = insights.inactivity(members, logins, self._today(), 7)
@@ -191,9 +305,324 @@ class VeilleMixin:
             await channel.send(embed=embed)
         return len(fresh[-5:])
 
+    # ---- Entreprises du pays : fondations, fermetures, changements de propriétaire -------------------
+    async def country_enterprises(self, st, members: dict[str, dict] | None = None) -> list[dict]:
+        members = members if members is not None else await st.members(max_age=300)
+        return entreprises.country_enterprises(await st.api.enterprises(), members, st.extra_enterprises)
+
+    async def run_enterprises(self, guild: discord.Guild, st) -> list[str]:
+        rows = await self.country_enterprises(st)
+        await self.sync_enterprise_roles(guild, st, rows)
+        if not (st.announce_channel_id and st.announce_enterprises):
+            return []
+        key = f"ng_entreprises:{guild.id}"
+        lines = entreprises.enterprise_events(await self._load(key), rows)
+        await self._save(key, entreprises.snapshot(rows))
+        if not lines:
+            return []
+        channel = self._channel(guild, st.announce_channel_id, st, "annonces du pays")
+        if channel is not None:
+            text, roles = "\n".join(lines[:10]), []
+            if st.announce_role_id:
+                text, roles = f"<@&{st.announce_role_id}>\n{text}", [discord.Object(st.announce_role_id)]
+            await channel.send(truncate(text, 2000), allowed_mentions=discord.AllowedMentions(roles=roles, users=False,
+                                                                                               everyone=False))
+        return lines
+
+    # ---- Fiche d'une entreprise (commande /entreprise et salons des entreprises) ----------------------
+    async def enterprise_embed(self, guild_id: int, st, nom: str, *, rows: list[dict] | None = None,
+                               chart: bool = True, activity: bool = True):
+        """(embed, fiche de l'API) d'une entreprise, ou (None, None) si elle existe pas."""
+        nom = nom.strip()
+        data = await st.api.enterprise(nom)
+        rows = rows if rows is not None else await st.api.enterprises()
+        if data is None:
+            close = next((r["name"] for r in rows if str(r.get("name", "")).lower() == nom.lower()), None)
+            data = await st.api.enterprise(close) if close else None
+        if data is None:
+            return None, None
+        name = data.get("name") or nom
+        embed = discord.Embed(title=f"🏢 {name}", color=GREEN if data.get("is_open") else GREY)
+        desc = [f"{entreprises.type_label(data.get('type'))} · {'🟢 ouverte' if data.get('is_open') else '🔒 fermée'}"
+                + (f" · fondée le {data['created_on']}" if data.get("created_on") else "")]
+        if data.get("description"):
+            desc.append(f"*{truncate(str(data['description']), 300)}*")
+        if data.get("services"):
+            desc.append(f"**Services :** {truncate(str(data['services']), 300)}")
+        embed.description = "\n".join(desc)
+        owner = data.get("owner") or "?"
+        members = await st.members(max_age=300)
+        who = owner
+        if owner.lower() in members:
+            custom = await self._role_names(st)
+            role = members[owner.lower()].get("role")
+            who += f" ({custom.get(role) or insights_rank(role)} de {st.country_name})"
+        if link := await self.store.get_link_by_name(guild_id, owner):
+            who += f" · <@{link['discord_id']}>"
+        embed.add_field(name="👑 Propriétaire", value=who, inline=False)
+        staff = await self.store.employees(guild_id, name)
+        if staff:
+            embed.add_field(name=f"👷 Employés sur Discord ({len(staff)})", inline=False,
+                            value=truncate(", ".join(f"<@{e['discord_id']}>" for e in staff)))
+        embed.add_field(name="💰 Chiffre d'affaires", value=f"{veille.fmt(data.get('turnover'))} $")
+        embed.add_field(name="🏦 Banque", value=f"{veille.fmt(data.get('bank_balance'))} $")
+        embed.add_field(name="👥 Membres", value=str(data.get("members_count", "?")))
+        contracts = f"{data.get('contracts_done', 0)} faits · {data.get('contracts_success_pct', '?')} % réussis"
+        if data.get("contracts_in_progress_value"):
+            contracts += f" · {veille.fmt(data['contracts_in_progress_value'])} $ en cours"
+        if data.get("disputes"):
+            contracts += f" · ⚠️ {data['disputes']} litige(s)"
+        embed.add_field(name="📝 Contrats", value=contracts, inline=False)
+        flows = data.get("flows_14d") or {}
+        if any(isinstance(flows.get(k), int) for k in ("net", "salaries", "taxes")):
+            embed.add_field(name="💸 14 derniers jours", inline=False,
+                            value=f"Net {veille.signed(flows.get('net'), ' $')} · salaires {veille.fmt(flows.get('salaries'))} $ · "
+                                  f"taxes {veille.fmt(flows.get('taxes'))} $")
+        pos, of = entreprises.rank(rows, name, kind=data.get("type"))
+        pos_all, of_all = entreprises.rank(rows, name)
+        if pos:
+            embed.add_field(name="🏆 Rang (chiffre d'affaires)", inline=False,
+                            value=f"{pos}e sur {of} de son type · {pos_all}e sur {of_all} au serveur")
+        points = await st.api.series("enterprise.turnover", name, "30d") if chart else []
+        summary = veille.series_summary(points)
+        if summary:
+            embed.add_field(name="📈 CA sur 30 jours", inline=False,
+                            value=f"`{summary['spark']}`\n{veille.signed(summary['delta'], ' $')} · min {veille.fmt(summary['min'])} · max {veille.fmt(summary['max'])}")
+        extra = []
+        kind = data.get("type") if activity else None  # récoltes, production, parcelles : selon le type
+        if kind in ("farm", "trader", "bet"):
+            extra += entreprises.operations_fields(await st.api.enterprise_operations(name))
+        if kind in ("electric", "petrol"):
+            extra += entreprises.energy_fields(await st.api.enterprise_energy(name))
+        if kind == "realestate":
+            if field := entreprises.parcels_field(await st.api.enterprise_parcels(name)):
+                extra.append(field)
+        for fname, value in extra[:5]:
+            embed.add_field(name=fname, value=truncate(value), inline=False)
+        return embed, data
+
+    # ---- Un salon par entreprise du pays, avec ses stats à jour -------------------------------------
+    async def _enterprise_category(self, guild: discord.Guild, st):
+        cat = guild.get_channel(st.enterprise_category_id) if st.enterprise_category_id else None
+        key = f"ng_cat_ent:{guild.id}"
+        if cat is None and (saved := await self.store.get_value(key)):
+            cat = guild.get_channel(int(saved))
+        if cat is None:
+            if not guild.me.guild_permissions.manage_channels:
+                if st.should_warn("cat-ent", 3600):
+                    log.warning("%s : il me faut « Gérer les salons » pour créer les salons des entreprises", guild.name)
+                return None
+            overwrites = {guild.default_role: discord.PermissionOverwrite(send_messages=False),
+                          guild.me: discord.PermissionOverwrite(send_messages=True, embed_links=True)}
+            cat = await guild.create_category("🏢 Entreprises", overwrites=overwrites, reason="Salons des entreprises du pays")
+            await self.store.set_value(key, str(cat.id))
+        return cat
+
+    async def _keep_message(self, channel, key: str, embed: discord.Embed) -> None:
+        """Modifie le message gardé à jour dans ce salon, ou en publie un nouveau."""
+        saved = await self.store.get_value(key)
+        if saved:
+            try:
+                await channel.get_partial_message(int(saved)).edit(embed=embed)
+                return
+            except discord.NotFound:
+                pass
+        message = await channel.send(embed=embed)
+        await self.store.set_value(key, str(message.id))
+
+    async def run_enterprise_channels(self, guild: discord.Guild, st) -> int:
+        """Crée le salon de chaque entreprise du pays (une seule fois) et met ses stats à jour.
+        Retourne le nombre de salons mis à jour. Rien n'est jamais supprimé."""
+        rows = await st.api.enterprises()
+        members = await st.members(max_age=300)
+        ours = entreprises.country_enterprises(rows, members, st.extra_enterprises)
+        category = await self._enterprise_category(guild, st)
+        if category is None:
+            return 0
+        done = 0
+        # Le résumé de toutes les entreprises du pays
+        key = f"ng_salon_ent_resume:{guild.id}"
+        summary_channel = guild.get_channel(int(await self.store.get_value(key) or 0))
+        if summary_channel is None:
+            summary_channel = await category.create_text_channel("📊・entreprises-du-pays", reason="Résumé des entreprises",
+                                                                 topic=f"Les entreprises de {st.country_name}, mises à jour aux {st.enterprise_interval} minutes")
+            await self.store.set_value(key, str(summary_channel.id))
+        tot = entreprises.totals(ours)
+        embed = discord.Embed(title=f"🏢 Les entreprises de {st.country_name}", color=BLUE, timestamp=discord.utils.utcnow(),
+                              description=(f"**{tot['count']}** entreprise(s) · **{tot['employees']}** employé(s) en jeu · "
+                                           f"CA total **{veille.fmt(tot['turnover'])} $** · banques {veille.fmt(tot['bank'])} $"))
+        for r in ours[:20]:
+            pos, of = entreprises.rank(rows, r["name"], kind=r.get("type"))
+            embed.add_field(name=f"{entreprises.type_label(r.get('type'))} {r['name']}", inline=False,
+                            value=f"chef **{r.get('owner') or '?'}** · CA {veille.fmt(r.get('turnover'))} $"
+                                  + (f" · {pos}e sur {of}" if pos else ""))
+        embed.set_footer(text=f"Mis à jour aux {st.enterprise_interval} minutes · un salon par entreprise juste en dessous")
+        await self._keep_message(summary_channel, f"ng_msg_ent:{summary_channel.id}", embed)
+        done += 1
+        # Un salon par entreprise
+        current = {r["name"] for r in ours}
+        for r in ours:
+            ckey = f"ng_salon_ent:{guild.id}:{r['name']}"
+            channel = guild.get_channel(int(await self.store.get_value(ckey) or 0))
+            role = await self.enterprise_role(guild, st, r, create=False) if st.enterprise_roles else None
+            wanted = self._enterprise_overwrites(guild, st, role)
+            if channel is None:
+                overwrites = dict(getattr(category, "overwrites", {}) or {})
+                overwrites.update(wanted)
+                icon = entreprises.TYPES.get(r.get("type"), ("🏢", ""))[0]
+                channel = await category.create_text_channel(
+                    f"{icon}・{r['name']}"[:100], overwrites=overwrites, reason=f"Entreprise {r['name']}",
+                    topic=f"{entreprises.type_label(r.get('type'))} de {r.get('owner') or '?'} · "
+                          f"stats à jour aux {st.enterprise_interval} minutes")
+                await self.store.set_value(ckey, str(channel.id))
+            else:
+                await self._fit_permissions(channel, wanted)
+            embed, data = await self.enterprise_embed(guild.id, st, r["name"], rows=rows,
+                                                      chart=st.enterprise_chart, activity=st.enterprise_activity)
+            if embed is None:
+                continue
+            if data.get("owner"):
+                embed.set_thumbnail(url=FACE_URL.format(data["owner"]))
+            embed.timestamp = discord.utils.utcnow()
+            embed.set_footer(text=f"Mis à jour aux {st.enterprise_interval} minutes · /entreprise pour la fiche avec le drapeau")
+            await self._keep_message(channel, f"ng_msg_ent:{channel.id}", embed)
+            done += 1
+        # Entreprises qui sont plus au pays : on le dit dans leur salon (une fois), sans rien supprimer
+        prefix = f"ng_salon_ent:{guild.id}:"
+        for key in await self.store.keys(prefix):
+            name = key[len(prefix):]
+            if name in current or await self.store.get_value(f"ng_ent_partie:{guild.id}:{name}"):
+                continue
+            channel = guild.get_channel(int(await self.store.get_value(key) or 0))
+            if channel is not None:
+                gone = discord.Embed(title=f"🏢 {name}", color=GREY,
+                                     description="📉 Cette entreprise est plus au pays (fermée, renommée ou vendue). "
+                                                 "Le salon est gardé : supprime-le si tu en veux plus.")
+                await self._keep_message(channel, f"ng_msg_ent:{channel.id}", gone)
+            await self.store.set_value(f"ng_ent_partie:{guild.id}:{name}", "1")
+        return done
+
+    @staticmethod
+    def _enterprise_overwrites(guild: discord.Guild, st, role) -> dict:
+        """Permissions voulues dans le salon d'une entreprise selon les options (privé, employés qui écrivent)."""
+        wanted: dict = {}
+        if role is None:
+            return wanted  # pas de rôle d'entreprise : le salon suit sa catégorie
+        if st.private_enterprises:
+            wanted[guild.default_role] = discord.PermissionOverwrite(view_channel=False, send_messages=False)
+            wanted[guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True)
+        wanted[role] = discord.PermissionOverwrite(view_channel=True if st.private_enterprises else None,
+                                                   send_messages=bool(st.staff_can_write))
+        return wanted
+
+    @staticmethod
+    async def _fit_permissions(channel, wanted: dict) -> None:
+        """Change les permissions d'un salon déjà créé si les options ont changé (rien si c'est déjà bon)."""
+        overwrites_for = getattr(channel, "overwrites_for", None)
+        if overwrites_for is None:
+            return
+        for target, overwrite in wanted.items():
+            if overwrites_for(target) != overwrite:
+                try:
+                    await channel.set_permissions(target, overwrite=overwrite, reason="Options des salons d'entreprise")
+                except discord.HTTPException as e:
+                    log.warning("Permissions du salon %s pas changées : %s", getattr(channel, "name", "?"), e)
+                    return
+
+    # ---- Rôles des entreprises : un rôle par entreprise du pays (patron + employés) et un rôle « Patron » --
+    @staticmethod
+    def _holders(guild: discord.Guild, role_id: int) -> list:
+        members = guild.members.values() if isinstance(guild.members, dict) else guild.members
+        return [m for m in members if any(r.id == role_id for r in m.roles)]
+
+    async def enterprise_role(self, guild: discord.Guild, st, row: dict, *, create: bool) -> discord.Role | None:
+        """Le rôle Discord d'une entreprise (créé au besoin si l'option est activée)."""
+        key = f"ng_role_ent:{guild.id}:{row['name']}"
+        role_id = await self.store.get_value(key)
+        role = guild.get_role(int(role_id)) if role_id else None
+        if role is None:
+            role = next((r for r in getattr(guild, "roles", []) if r.name == entreprises.role_name(row["name"])), None)
+        if role is None and create:
+            if not guild.me.guild_permissions.manage_roles:
+                return None
+            try:
+                role = await guild.create_role(name=entreprises.role_name(row["name"]), mentionable=True,
+                                               colour=discord.Colour(entreprises.TYPE_COLORS.get(row.get("type"), 0x95A5A6)),
+                                               reason=f"Entreprise {row['name']} ({st.country_name})")
+            except discord.HTTPException as e:
+                if st.should_warn(f"role-ent:{row['name']}"):
+                    log.warning("%s : rôle de l'entreprise %s pas créé (%s)", guild.name, row["name"], e)
+                return None
+        if role is not None and str(role.id) != role_id:
+            await self.store.set_value(key, str(role.id))
+        return role
+
+    async def sync_enterprise_roles(self, guild: discord.Guild, st, rows: list[dict] | None = None) -> int:
+        """Ajuste les rôles d'entreprise et le rôle « Patron ». Retourne le nombre de membres modifiés."""
+        if not (st.enterprise_roles or st.patron_role_id or st.employee_role_id):
+            return 0
+        rows = rows if rows is not None else await self.country_enterprises(st)
+        links = {link["ng_name"].lower(): link["discord_id"] for link in await self.store.all_links(guild.id)}
+        changes: dict[int, SyncPlan] = {}
+
+        def plan(member_id: int) -> SyncPlan:
+            return changes.setdefault(member_id, SyncPlan())
+
+        if st.enterprise_roles:
+            wanted = entreprises.wanted_holders(rows, links, await self.store.employees(guild.id))
+            current = {r["name"] for r in rows}
+            for row in rows:
+                role = await self.enterprise_role(guild, st, row, create=True)
+                if role is None:
+                    continue
+                holders = {m.id for m in self._holders(guild, role.id)}
+                for mid in wanted[row["name"]] - holders:
+                    if guild.get_member(mid):
+                        plan(mid).add_roles.add(role.id)
+                for mid in holders - wanted[row["name"]]:
+                    plan(mid).remove_roles.add(role.id)
+            # Entreprises plus au pays : on retire leur rôle (sans le supprimer)
+            prefix = f"ng_role_ent:{guild.id}:"
+            for key in await self.store.keys(prefix):
+                name = key[len(prefix):]
+                if name in current:
+                    continue
+                role_id = await self.store.get_value(key)
+                if role_id and (role := guild.get_role(int(role_id))):
+                    for m in self._holders(guild, role.id):
+                        plan(m.id).remove_roles.add(role.id)
+        if st.patron_role_id:
+            bosses = entreprises.patrons(await st.api.enterprises(), links)
+            holders = {m.id for m in self._holders(guild, st.patron_role_id)}
+            for mid in bosses - holders:
+                if guild.get_member(mid):
+                    plan(mid).add_roles.add(st.patron_role_id)
+            for mid in holders - bosses:
+                plan(mid).remove_roles.add(st.patron_role_id)
+        if st.employee_role_id:  # rôle « Employé » : ajoutés avec /employe dans une entreprise du pays
+            names = {r["name"] for r in rows}
+            staff = {int(e["discord_id"]) for e in await self.store.employees(guild.id) if e["enterprise"] in names}
+            holders = {m.id for m in self._holders(guild, st.employee_role_id)}
+            for mid in staff - holders:
+                if guild.get_member(mid):
+                    plan(mid).add_roles.add(st.employee_role_id)
+            for mid in holders - staff:
+                plan(mid).remove_roles.add(st.employee_role_id)
+        done = 0
+        for mid, p in changes.items():
+            member = guild.get_member(mid)
+            if member is None or p.empty:
+                continue
+            await self._apply(member, p, st, "NationsGlory : rôles des entreprises")
+            done += 1
+        return done
+
+
     # ---- Marché des céréales -----------------------------------------------------------------------
     async def run_market(self, guild: discord.Guild, st) -> list[str]:
         rows = await st.api.market()
+        if st.cereals:
+            rows = [r for r in rows if veille.cereal_wanted(r.get("cereal"), st.cereals)]
         key = f"ng_marche:{guild.id}"
         lines, ref = veille.market_moves(await self._load(key), rows, st.market_pct)
         await self._save(key, ref)
@@ -206,6 +635,39 @@ class VeilleMixin:
             embed.set_footer(text=f"Variation d'au moins {st.market_pct} % depuis la dernière alerte")
             await channel.send(embed=embed)
         return lines
+
+    # ---- Objets surveillés à l'hôtel des ventes ----------------------------------------------------
+    async def run_hdv(self, guild: discord.Guild, st) -> list[str]:
+        items = []
+        for query in st.hdv_items:
+            item = veille.hdv_pick(query, await st.api.hdv_search(query, limit=5, max_age=1200))
+            if item is None:
+                if st.should_warn(f"hdv:{query}", 6 * 3600):
+                    log.warning("%s : objet « %s » introuvable à l'hôtel des ventes", guild.name, query)
+                continue
+            items.append(item)
+        key = f"ng_hdv:{guild.id}"
+        lines, ref = veille.hdv_moves(await self._load(key), items, st.hdv_pct)
+        await self._save(key, ref)
+        if lines and (channel := self._channel(guild, st.hdv_channel_id, st, "hôtel des ventes")):
+            embed = discord.Embed(title=f"🏪 Hôtel des ventes · {st.api.server.capitalize()}",
+                                  description="\n".join(lines[:15]), color=0xF1C40F)
+            embed.set_footer(text=f"Prix du jour · variation d'au moins {st.hdv_pct} % depuis la dernière alerte")
+            await channel.send(embed=embed)
+        return lines
+
+    # ---- Loteries du serveur ----------------------------------------------------------------------
+    async def run_lotteries(self, guild: discord.Guild, st) -> int:
+        rows = await st.api.lotteries()
+        key = f"ng_loteries:{guild.id}"
+        events, states = veille.lottery_events(await self._load(key), rows)
+        await self._save(key, states)
+        channel = self._channel(guild, st.lottery_channel_id, st, "loteries") if events else None
+        if channel is None:
+            return 0
+        for kind, lot in events[:5]:
+            await channel.send(embed=lottery_embed(kind, lot, st.api.server))
+        return len(events[:5])
 
     # ---- Diplomatie et pays surveillés (appelé par collect_alerts) ------------------------------------
     async def diplomacy_and_watch(self, guild: discord.Guild, st, card: dict) -> tuple[list[str], bool]:
@@ -252,3 +714,40 @@ class VeilleMixin:
         from .cog import paris_today  # même jour que les dates de l'API
 
         return paris_today()
+
+
+def lottery_embed(kind: str, lot: dict, server: str) -> discord.Embed:
+    """Annonce d'une nouvelle loterie ou de ses gagnants."""
+    def stamp(value) -> str | None:
+        try:
+            return discord.utils.format_dt(datetime.fromisoformat(str(value).replace("Z", "+00:00")), "R")
+        except (TypeError, ValueError):
+            return None
+
+    new = kind == "nouvelle"
+    embed = discord.Embed(title=f"🎟️ Nouvelle loterie sur {server.capitalize()}!" if new else "🏁 Loterie terminée",
+                          color=0xF1C40F if new else GREY)
+    if isinstance(lot.get("cash_prize"), int) and lot["cash_prize"]:
+        embed.add_field(name="💰 Cagnotte", value=f"{veille.fmt(lot['cash_prize'])} $")
+    prizes = [p for p in lot.get("item_prizes") or [] if p]
+    if prizes:
+        embed.add_field(name="🎁 Objets à gagner", value=str(len(prizes)))
+    if isinstance(lot.get("ticket_price"), int):
+        embed.add_field(name="🎫 Ticket", value=f"{veille.fmt(lot['ticket_price'])} $")
+    if lot.get("tickets_sold") is not None:
+        embed.add_field(name="Tickets vendus", value=str(lot["tickets_sold"]))
+    if new:
+        if when := stamp(lot.get("ends_at")):
+            embed.add_field(name="⏰ Fin", value=when)
+    else:
+        winners = [str(w.get("username") if isinstance(w, dict) else w) for w in lot.get("winners") or []]
+        embed.add_field(name="🏆 Gagnant(s)", inline=False,
+                        value=truncate(", ".join(discord.utils.escape_markdown(w) for w in winners), 1024) or "Aucun")
+    embed.set_footer(text=f"Loterie {lot.get('lottery_id')} · API NationsGlory")
+    return embed
+
+
+def insights_rank(role: str | None) -> str:
+    from .logic import RANK_LABELS
+
+    return RANK_LABELS.get(role or "", role or "Sans grade")
